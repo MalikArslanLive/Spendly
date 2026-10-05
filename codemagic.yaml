@@ -1,14 +1,14 @@
 workflows:
-android-build:
-name: My Expenses APK
-max_build_duration: 120
-instance_type: mac_mini_m2
+  android-build:
+    name: My Expenses APK
+    max_build_duration: 120
+    instance_type: mac_mini_m2
 
-scripts:
-  - name: Build Android APK
-    script: |
-      chmod +x ./gradlew
-      ./gradlew assembleDebug
+    scripts:
+      - name: Build Android APK
+        script: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
 
-artifacts:
-  - app/build/outputs/apk/debug/*.apk
+    artifacts:
+      - app/build/outputs/apk/debug/*.apk
