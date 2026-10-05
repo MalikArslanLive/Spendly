@@ -23,8 +23,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.PieChart
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -154,7 +152,7 @@ fun MonthlyScreen(
                 }
             }
 
-            // Summary Card (Total Expense, Number of Expenses, Daily Average)
+            // Summary Card (Total Expense, Credits, Balance, Number of Expenses, Daily Average)
             item {
                 Card(
                     modifier = Modifier
@@ -170,31 +168,48 @@ fun MonthlyScreen(
                             .fillMaxWidth()
                             .padding(20.dp)
                     ) {
-                        Text(
-                            text = "Total Monthly Expense",
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Monthly Net Balance",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (reportData.balance >= 0) Color(0xFFD1FAE5) else Color(0xFFFEE2E2)
+                            ) {
+                                Text(
+                                    text = if (reportData.balance >= 0) "Surplus" else "Deficit",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = if (reportData.balance >= 0) Color(0xFF065F46) else Color(0xFF991B1B),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(4.dp))
 
                         Text(
-                            text = Formatters.formatPkr(reportData.totalAmount),
+                            text = Formatters.formatPkr(reportData.balance),
                             style = MaterialTheme.typography.headlineLarge.copy(
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 32.sp
                             ),
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.testTag("monthly_total_amount_text")
+                            color = if (reportData.balance >= 0) Color(0xFF047857) else MaterialTheme.colorScheme.error,
+                            modifier = Modifier.testTag("monthly_balance_amount_text")
                         )
 
                         Spacer(modifier = Modifier.height(14.dp))
 
+                        // Credits vs Expenses breakdown
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            // Total count badge
                             Surface(
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(12.dp),
@@ -202,7 +217,57 @@ fun MonthlyScreen(
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
                                     Text(
-                                        text = "Expenses Count",
+                                        text = "Total Credits",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFF059669)
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = Formatters.formatPkr(reportData.totalCredits),
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = Color(0xFF059669),
+                                        modifier = Modifier.testTag("monthly_credits_text")
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surface
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "Total Expenses",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = Formatters.formatPkr(reportData.totalAmount),
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.testTag("monthly_total_amount_text")
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // Total count badge
+                            Surface(
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        text = "Transactions Count",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -220,11 +285,11 @@ fun MonthlyScreen(
                             Surface(
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surface
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
                                     Text(
-                                        text = "Daily Average",
+                                        text = "Daily Avg Expense",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

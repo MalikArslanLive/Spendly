@@ -18,8 +18,16 @@ class ExpenseRepository(private val expenseDao: ExpenseDao) {
         return expenseDao.getExpensesByMonth(monthPrefix)
     }
 
+    fun getExpensesByDateRange(startDate: String, endDate: String): Flow<List<Expense>> {
+        return expenseDao.getExpensesByDateRange(startDate, endDate)
+    }
+
     suspend fun getExpenseById(id: Long): Expense? {
         return expenseDao.getExpenseById(id)
+    }
+
+    suspend fun getExpenseByTransactionId(txnId: String): Expense? {
+        return expenseDao.getExpenseByTransactionId(txnId)
     }
 
     suspend fun insertExpense(expense: Expense): Long {

@@ -1,6 +1,6 @@
 {
-  "name": "My Expenses",
-  "description": "Personal expense tracker to quickly record daily expenses and view daily, calendar, and monthly spending reports in Pakistani Rupees.",
+  "name": "Spendly",
+  "description": "Spendly - Personal expense tracker to quickly record daily expenses and view daily, calendar, and monthly spending reports in Pakistani Rupees.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

@@ -53,12 +53,12 @@ object CsvExporter {
 
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/csv"
-                putExtra(Intent.EXTRA_SUBJECT, "My Expenses Export")
+                putExtra(Intent.EXTRA_SUBJECT, "Spendly Export")
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
-            val chooser = Intent.createChooser(shareIntent, "Export Expenses CSV")
+            val chooser = Intent.createChooser(shareIntent, "Export Spendly CSV")
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
             return true

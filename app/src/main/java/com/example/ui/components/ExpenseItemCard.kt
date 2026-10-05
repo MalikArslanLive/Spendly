@@ -32,7 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.Expense
-import com.example.model.ExpenseCategories
+import com.example.model.getCategoryInfoFor
 import com.example.util.Formatters
 
 @Composable
@@ -42,7 +42,8 @@ fun ExpenseItemCard(
     onDeleteClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val categoryInfo = ExpenseCategories.getCategoryInfo(expense.category)
+    val isCredit = expense.transactionType == "CREDIT"
+    val categoryInfo = getCategoryInfoFor(expense.category, isCredit)
 
     Card(
         modifier = modifier
@@ -79,7 +80,7 @@ fun ExpenseItemCard(
 
             Spacer(modifier = Modifier.width(14.dp))
 
-            // Details: Category & Note & Time
+            // Details: Category & Note & Time & Type
             Column(
                 modifier = Modifier.weight(1f)
             ) {
@@ -103,22 +104,35 @@ fun ExpenseItemCard(
                     modifier = Modifier.padding(top = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Category badge if note is present
-                    if (expense.note.isNotBlank()) {
-                        Text(
-                            text = expense.category,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontWeight = FontWeight.Medium,
-                                fontSize = 12.sp
-                            ),
-                            color = categoryInfo.color
-                        )
-                        Text(
-                            text = " • ",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
+                    // Type Badge (Credit vs Expense)
+                    Text(
+                        text = if (isCredit) "Credit" else "Expense",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        ),
+                        color = if (isCredit) Color(0xFF059669) else Color(0xFFDC2626)
+                    )
+                    Text(
+                        text = " • ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+
+                    // Category badge
+                    Text(
+                        text = expense.category,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 12.sp
+                        ),
+                        color = categoryInfo.color
+                    )
+                    Text(
+                        text = " • ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
 
                     Text(
                         text = expense.time,
@@ -135,12 +149,12 @@ fun ExpenseItemCard(
                 horizontalAlignment = Alignment.End
             ) {
                 Text(
-                    text = Formatters.formatPkr(expense.amount),
+                    text = if (isCredit) "+ ${Formatters.formatPkr(expense.amount)}" else Formatters.formatPkr(expense.amount),
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
                     ),
-                    color = MaterialTheme.colorScheme.error,
+                    color = if (isCredit) Color(0xFF059669) else MaterialTheme.colorScheme.error,
                     modifier = Modifier.testTag("expense_amount_${expense.id}")
                 )
             }
@@ -148,36 +162,32 @@ fun ExpenseItemCard(
             Spacer(modifier = Modifier.width(4.dp))
 
             // Action: Edit & Delete buttons
-            Row(
-                verticalAlignment = Alignment.CenterVertically
+            IconButton(
+                onClick = onClick,
+                modifier = Modifier
+                    .size(34.dp)
+                    .testTag("expense_edit_btn_${expense.id}")
             ) {
-                IconButton(
-                    onClick = onClick,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .testTag("edit_expense_btn_${expense.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit expense",
-                        tint = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+                Icon(
+                    imageVector = Icons.Default.Edit,
+                    contentDescription = "Edit",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
 
-                IconButton(
-                    onClick = onDeleteClick,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .testTag("delete_expense_btn_${expense.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteOutline,
-                        contentDescription = "Delete expense",
-                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+            IconButton(
+                onClick = onDeleteClick,
+                modifier = Modifier
+                    .size(34.dp)
+                    .testTag("expense_delete_btn_${expense.id}")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.DeleteOutline,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp)
+                )
             }
         }
     }

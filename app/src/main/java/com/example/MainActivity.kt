@@ -46,6 +46,7 @@ import com.example.ui.ExpenseViewModelFactory
 import com.example.ui.components.AddEditExpenseDialog
 import com.example.ui.components.ClearDataConfirmDialog
 import com.example.ui.components.DeleteConfirmDialog
+import com.example.ui.components.GoogleSheetDeleteErrorDialog
 import com.example.ui.screens.CalendarScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.MonthlyScreen
@@ -82,6 +83,8 @@ fun MyExpensesApp(viewModel: ExpenseViewModel) {
     val isAddEditOpen by viewModel.isAddEditOpen.collectAsStateWithLifecycle()
     val editingExpense by viewModel.editingExpense.collectAsStateWithLifecycle()
     val expenseToDelete by viewModel.expenseToDelete.collectAsStateWithLifecycle()
+    val isDeletingSyncedExpense by viewModel.isDeletingSyncedExpense.collectAsStateWithLifecycle()
+    val deleteErrorExpense by viewModel.deleteErrorExpense.collectAsStateWithLifecycle()
     val isClearDataConfirmOpen by viewModel.isClearDataConfirmOpen.collectAsStateWithLifecycle()
     val isSyncSettingsOpen by viewModel.isSyncSettingsOpen.collectAsStateWithLifecycle()
     val selectedDate by viewModel.selectedDate.collectAsStateWithLifecycle()
@@ -230,8 +233,8 @@ fun MyExpensesApp(viewModel: ExpenseViewModel) {
                     initialExpense = editingExpense,
                     defaultDate = if (currentScreenIndex == 1) selectedDate else Formatters.todayDateString(),
                     onDismiss = { viewModel.closeAddEditDialog() },
-                    onSave = { id, amount, category, note, date, time ->
-                        viewModel.saveExpense(id, amount, category, note, date, time)
+                    onSave = { id, amount, category, note, date, time, transactionType ->
+                        viewModel.saveExpense(id, amount, category, note, date, time, transactionType)
                     },
                     onDelete = { expense ->
                         viewModel.promptDeleteExpense(expense)
@@ -239,12 +242,23 @@ fun MyExpensesApp(viewModel: ExpenseViewModel) {
                 )
             }
 
-            // Confirm Delete Dialog (Moves single item to Trash)
+            // Confirm Delete Dialog
             if (expenseToDelete != null) {
+                val exp = expenseToDelete!!
                 DeleteConfirmDialog(
-                    expense = expenseToDelete!!,
+                    expense = exp,
+                    isSynced = viewModel.isExpenseSyncedToGoogleSheets(exp),
+                    isDeleting = isDeletingSyncedExpense,
                     onConfirm = { viewModel.confirmDeleteExpense() },
                     onDismiss = { viewModel.cancelDeleteExpense() }
+                )
+            }
+
+            // Google Sheets delete error dialog (shown when Google Sheets is unavailable or deletion fails)
+            if (deleteErrorExpense != null) {
+                GoogleSheetDeleteErrorDialog(
+                    onRetry = { viewModel.retryDeleteExpense() },
+                    onCancel = { viewModel.dismissDeleteError() }
                 )
             }
 

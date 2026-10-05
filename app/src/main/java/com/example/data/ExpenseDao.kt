@@ -21,11 +21,17 @@ interface ExpenseDao {
     @Query("SELECT * FROM expenses WHERE isDeleted = 0 AND date LIKE :monthPrefix || '%' ORDER BY date DESC, createdAt DESC")
     fun getExpensesByMonth(monthPrefix: String): Flow<List<Expense>>
 
+    @Query("SELECT * FROM expenses WHERE isDeleted = 0 AND date >= :startDate AND date <= :endDate ORDER BY date DESC, createdAt DESC")
+    fun getExpensesByDateRange(startDate: String, endDate: String): Flow<List<Expense>>
+
     @Query("SELECT * FROM expenses WHERE isDeleted = 0 ORDER BY date ASC, time ASC")
     suspend fun getAllActiveExpensesList(): List<Expense>
 
     @Query("SELECT * FROM expenses WHERE id = :id LIMIT 1")
     suspend fun getExpenseById(id: Long): Expense?
+
+    @Query("SELECT * FROM expenses WHERE transactionId = :txnId LIMIT 1")
+    suspend fun getExpenseByTransactionId(txnId: String): Expense?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertExpense(expense: Expense): Long

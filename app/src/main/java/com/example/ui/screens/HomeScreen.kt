@@ -30,7 +30,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TableChart
-import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -79,7 +78,11 @@ fun HomeScreen(
     val context = LocalContext.current
     val todayExpenses by viewModel.todayExpenses.collectAsStateWithLifecycle()
     val todayTotal by viewModel.todayTotal.collectAsStateWithLifecycle()
+    val todayCreditsTotal by viewModel.todayCreditsTotal.collectAsStateWithLifecycle()
+    val todayBalance by viewModel.todayBalance.collectAsStateWithLifecycle()
     val thisMonthTotal by viewModel.thisMonthTotal.collectAsStateWithLifecycle()
+    val thisMonthCreditsTotal by viewModel.thisMonthCreditsTotal.collectAsStateWithLifecycle()
+    val thisMonthBalance by viewModel.thisMonthBalance.collectAsStateWithLifecycle()
     val trashCount by viewModel.trashCount.collectAsStateWithLifecycle()
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
 
@@ -95,7 +98,7 @@ fun HomeScreen(
             title = {
                 Column {
                     Text(
-                        text = "My Expenses",
+                        text = "Spendly",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold,
                             fontSize = 20.sp
@@ -356,9 +359,9 @@ fun HomeScreen(
                                     }
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = "Today's Expense",
-                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
-                                        color = Color.White.copy(alpha = 0.9f)
+                                        text = "Today's Summary",
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = Color.White.copy(alpha = 0.95f)
                                     )
                                 }
 
@@ -367,7 +370,7 @@ fun HomeScreen(
                                     color = Color.White.copy(alpha = 0.2f)
                                 ) {
                                     Text(
-                                        text = "${todayExpenses.size} ${if (todayExpenses.size == 1) "expense" else "expenses"}",
+                                        text = "${todayExpenses.size} ${if (todayExpenses.size == 1) "item" else "items"}",
                                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                                         color = Color.White,
                                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
@@ -375,48 +378,93 @@ fun HomeScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
 
+                            // Today's Balance
                             Text(
-                                text = Formatters.formatPkr(todayTotal),
+                                text = "Balance: ${Formatters.formatPkr(todayBalance)}",
                                 style = MaterialTheme.typography.headlineLarge.copy(
                                     fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 36.sp
+                                    fontSize = 32.sp
                                 ),
-                                color = Color.White,
-                                modifier = Modifier.testTag("today_total_amount_text")
+                                color = if (todayBalance >= 0) Color(0xFFA7F3D0) else Color(0xFFFCA5A5),
+                                modifier = Modifier.testTag("today_balance_amount_text")
                             )
 
-                            Spacer(modifier = Modifier.height(14.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
 
-                            // This Month's Total indicator
+                            // Today's Breakdown: Credits & Expenses
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color.Black.copy(alpha = 0.18f)
+                                ) {
+                                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                        Text(
+                                            text = "Income / Credits",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFFA7F3D0)
+                                        )
+                                        Text(
+                                            text = Formatters.formatPkr(todayCreditsTotal),
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+
+                                Surface(
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color.Black.copy(alpha = 0.18f)
+                                ) {
+                                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                        Text(
+                                            text = "Expenses",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color(0xFFFCA5A5)
+                                        )
+                                        Text(
+                                            text = Formatters.formatPkr(todayTotal),
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Monthly Summary bar (October 2026: Credits | Expenses | Balance)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(Color.Black.copy(alpha = 0.15f))
+                                    .background(Color.Black.copy(alpha = 0.22f))
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.TrendingUp,
-                                        contentDescription = null,
-                                        tint = Color(0xFFA7F3D0),
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                Column {
                                     Text(
-                                        text = "This Month's Total:",
-                                        style = MaterialTheme.typography.bodySmall,
+                                        text = "${Formatters.formatMonthYear(Formatters.currentMonthString())} Total:",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                                         color = Color.White.copy(alpha = 0.85f)
+                                    )
+                                    Text(
+                                        text = "Credits: ${Formatters.formatPkr(thisMonthCreditsTotal)} • Expenses: ${Formatters.formatPkr(thisMonthTotal)}",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                        color = Color.White.copy(alpha = 0.8f)
                                     )
                                 }
                                 Text(
-                                    text = Formatters.formatPkr(thisMonthTotal),
+                                    text = Formatters.formatPkr(thisMonthBalance),
                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = Color(0xFFA7F3D0),
+                                    color = if (thisMonthBalance >= 0) Color(0xFFA7F3D0) else Color(0xFFFCA5A5),
                                     modifier = Modifier.testTag("this_month_total_amount_text")
                                 )
                             }
@@ -425,7 +473,7 @@ fun HomeScreen(
                 }
             }
 
-            // Large "+ Add Expense" Button
+            // Large "+ Add Transaction" Button
             item {
                 Button(
                     onClick = onAddExpenseClick,
@@ -446,7 +494,7 @@ fun HomeScreen(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "+ Add Expense",
+                        text = "+ Add Transaction",
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             fontSize = 17.sp

@@ -1,15 +1,21 @@
 package com.example.ui.components
 
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -20,18 +26,32 @@ import com.example.util.Formatters
 @Composable
 fun DeleteConfirmDialog(
     expense: Expense,
+    isSynced: Boolean = false,
+    isDeleting: Boolean = false,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val amountFormatted = Formatters.formatPkr(expense.amount)
-    val titleText = if (expense.note.isNotBlank()) {
-        "Move \"${expense.note}\" to Trash?"
+
+    val titleText = if (isSynced) {
+        "Delete Transaction?"
+    } else if (expense.note.isNotBlank()) {
+        "Delete \"${expense.note}\"?"
     } else {
-        "Move ${expense.category} to Trash?"
+        "Delete ${expense.category}?"
+    }
+
+    val bodyText = if (isSynced) {
+        "This transaction has already been synced to Google Sheets.\nDeleting it will also remove it from the connected Google Sheet."
+    } else {
+        val typeLabel = if (expense.transactionType == "CREDIT") "credit" else "expense"
+        "Delete this $typeLabel of $amountFormatted on ${expense.date}? It will be removed from your records."
     }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            if (!isDeleting) onDismiss()
+        },
         icon = {
             Icon(
                 imageVector = Icons.Default.DeleteOutline,
@@ -48,7 +68,7 @@ fun DeleteConfirmDialog(
         },
         text = {
             Text(
-                text = "Move this expense of $amountFormatted on ${expense.date} to Trash? You can restore it later from the Trash.",
+                text = bodyText,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -56,17 +76,31 @@ fun DeleteConfirmDialog(
         confirmButton = {
             TextButton(
                 onClick = onConfirm,
+                enabled = !isDeleting,
                 colors = ButtonDefaults.textButtonColors(
                     contentColor = MaterialTheme.colorScheme.error
                 ),
                 modifier = Modifier.testTag("confirm_delete_button")
             ) {
-                Text("Move to Trash", fontWeight = FontWeight.Bold)
+                if (isDeleting) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Deleting...", fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Text("Delete", fontWeight = FontWeight.Bold)
+                }
             }
         },
         dismissButton = {
             TextButton(
                 onClick = onDismiss,
+                enabled = !isDeleting,
                 modifier = Modifier.testTag("cancel_delete_button")
             ) {
                 Text("Cancel")
@@ -74,3 +108,51 @@ fun DeleteConfirmDialog(
         }
     )
 }
+
+@Composable
+fun GoogleSheetDeleteErrorDialog(
+    onRetry: () -> Unit,
+    onCancel: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.WarningAmber,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(32.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Could not update Google Sheets",
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+            )
+        },
+        text = {
+            Text(
+                text = "The transaction could not be removed from the connected Google Sheet. Your local transaction has been kept so nothing is lost.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onRetry,
+                modifier = Modifier.testTag("retry_delete_button")
+            ) {
+                Text("Retry", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onCancel,
+                modifier = Modifier.testTag("cancel_error_delete_button")
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+

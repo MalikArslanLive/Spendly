@@ -15,6 +15,7 @@ object Formatters {
     private val isoMonthFormat = SimpleDateFormat("yyyy-MM", Locale.US)
     private val timeDisplayFormat = SimpleDateFormat("hh:mm a", Locale.US)
     private val fullDateDisplayFormat = SimpleDateFormat("MMMM d, yyyy", Locale.US)
+    private val displayDateFormat = SimpleDateFormat("MMM d, yyyy", Locale.US)
     private val dayOfWeekDateDisplayFormat = SimpleDateFormat("EEEE, MMM d, yyyy", Locale.US)
     private val monthYearDisplayFormat = SimpleDateFormat("MMMM yyyy", Locale.US)
     private val shortDayMonthFormat = SimpleDateFormat("MMM d", Locale.US)
@@ -61,6 +62,18 @@ object Formatters {
         return try {
             val date = isoDateFormat.parse(dateString) ?: return dateString
             fullDateDisplayFormat.format(date)
+        } catch (_: Exception) {
+            dateString
+        }
+    }
+
+    /**
+     * Converts "2026-10-05" to "Oct 5, 2026"
+     */
+    fun formatDisplayDate(dateString: String): String {
+        return try {
+            val date = isoDateFormat.parse(dateString) ?: return dateString
+            displayDateFormat.format(date)
         } catch (_: Exception) {
             dateString
         }

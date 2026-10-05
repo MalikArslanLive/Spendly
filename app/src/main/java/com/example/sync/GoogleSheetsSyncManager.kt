@@ -41,11 +41,19 @@ enum class SyncState {
     FAILED
 }
 
+data class GoogleSheetItem(
+    val id: String,
+    val name: String,
+    val webViewLink: String
+)
+
 data class SyncStatus(
     val state: SyncState = SyncState.NOT_CONNECTED,
     val accountEmail: String? = null,
     val spreadsheetId: String? = null,
     val spreadsheetTitle: String? = null,
+    val spreadsheetUrl: String? = null,
+    val spreadsheetType: String? = null, // "created" or "existing"
     val pendingCount: Int = 0,
     val lastSyncTime: String? = null,
     val errorMessage: String? = null
@@ -60,7 +68,7 @@ class GoogleSheetsSyncManager(
         private const val PREFS_NAME = "google_sheets_multiuser_prefs"
         private const val KEY_ACTIVE_USER = "active_user_email"
 
-        const val DEFAULT_SPREADSHEET_TITLE = "My Expenses"
+        const val DEFAULT_SPREADSHEET_TITLE = "Spendly"
 
         const val SCOPE_DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
         const val SCOPE_SPREADSHEETS = "https://www.googleapis.com/auth/spreadsheets"
@@ -85,19 +93,22 @@ class GoogleSheetsSyncManager(
     }
 
     private fun loadInitialStatus(): SyncStatus {
-        val lastAccount = GoogleSignIn.getLastSignedInAccount(context)
         val activeEmail = prefs.getString(KEY_ACTIVE_USER, null)
-
-        // Only restore connected state if a REAL Google Account is recognized
-        if (lastAccount != null && !activeEmail.isNullOrBlank() && lastAccount.email.equals(activeEmail, ignoreCase = true)) {
+        if (!activeEmail.isNullOrBlank()) {
             val sheetId = prefs.getString("sheet_id_$activeEmail", null)
             val sheetTitle = prefs.getString("sheet_title_$activeEmail", DEFAULT_SPREADSHEET_TITLE)
+            val sheetUrl = prefs.getString("sheet_url_$activeEmail", null)
+                ?: if (!sheetId.isNullOrBlank()) "https://docs.google.com/spreadsheets/d/$sheetId/edit" else null
+            val sheetType = prefs.getString("sheet_type_$activeEmail", "existing")
             val lastSync = prefs.getString("last_sync_$activeEmail", null)
+
             return SyncStatus(
                 state = if (!sheetId.isNullOrBlank()) SyncState.SYNCED else SyncState.PENDING,
                 accountEmail = activeEmail,
                 spreadsheetId = sheetId,
                 spreadsheetTitle = sheetTitle,
+                spreadsheetUrl = sheetUrl,
+                spreadsheetType = sheetType,
                 lastSyncTime = lastSync
             )
         }
@@ -141,12 +152,17 @@ class GoogleSheetsSyncManager(
 
             val existingSheetId = prefs.getString("sheet_id_$cleanEmail", null)
             val existingTitle = prefs.getString("sheet_title_$cleanEmail", null)
+            val existingUrl = prefs.getString("sheet_url_$cleanEmail", null)
+                ?: if (!existingSheetId.isNullOrBlank()) "https://docs.google.com/spreadsheets/d/$existingSheetId/edit" else null
+            val existingType = prefs.getString("sheet_type_$cleanEmail", "existing")
 
             _syncStatus.value = SyncStatus(
                 state = if (existingSheetId != null) SyncState.SYNCED else SyncState.PENDING,
                 accountEmail = cleanEmail,
                 spreadsheetId = existingSheetId,
                 spreadsheetTitle = existingTitle,
+                spreadsheetUrl = existingUrl,
+                spreadsheetType = existingType,
                 errorMessage = null
             )
 
@@ -154,10 +170,10 @@ class GoogleSheetsSyncManager(
             onSuccess(account)
         } catch (e: ApiException) {
             val detailedMsg = when (e.statusCode) {
-                10 -> "Developer error (Code 10): Ensure your Android OAuth Client ID in Google Cloud Console is configured with package name 'com.aistudio.myexpenses.kfqrz' and the correct SHA-1 fingerprint."
+                10 -> "Configuration error (Code 10): Ensure SHA-1 is configured in Google Cloud Console for package 'com.aistudio.myexpenses.kfqrz'."
                 7 -> "Network error (Code 7): Please check your internet connection."
                 12501 -> "Google Sign-In was cancelled."
-                12500 -> "Google Sign-In failed (Code 12500): Check Google Play Services."
+                12500 -> "Google Sign-In failed (Code 12500): Please check Google Play Services."
                 else -> "Google Sign-In failed (Code ${e.statusCode}): ${e.message}"
             }
             _syncStatus.value = SyncStatus(
@@ -191,6 +207,54 @@ class GoogleSheetsSyncManager(
     }
 
     /**
+     * Searches user's accessible Google Sheets in Google Drive.
+     */
+    suspend fun searchUserGoogleSheets(query: String = ""): Result<List<GoogleSheetItem>> = withContext(Dispatchers.IO) {
+        val activeEmail = _syncStatus.value.accountEmail
+            ?: return@withContext Result.failure(Exception("No Google account connected."))
+
+        val token = getAccessToken()
+            ?: return@withContext Result.failure(Exception("Unable to acquire Google OAuth token."))
+
+        try {
+            val qParam = if (query.isNotBlank()) {
+                val escapedQuery = query.replace("'", "\\'")
+                "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and name contains '$escapedQuery'"
+            } else {
+                "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+            }
+
+            val encodedQ = URLEncoder.encode(qParam, "UTF-8")
+            val url = "https://www.googleapis.com/drive/v3/files?q=$encodedQ&fields=files(id,name,webViewLink)&orderBy=modifiedTime%20desc&pageSize=30"
+
+            val req = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer $token")
+                .get()
+                .build()
+
+            val res = client.newCall(req).execute()
+            if (res.isSuccessful) {
+                val resJson = JSONObject(res.body?.string() ?: "{}")
+                val filesArr = resJson.optJSONArray("files") ?: JSONArray()
+                val items = mutableListOf<GoogleSheetItem>()
+                for (i in 0 until filesArr.length()) {
+                    val fileObj = filesArr.getJSONObject(i)
+                    val id = fileObj.getString("id")
+                    val name = fileObj.optString("name", "Untitled Spreadsheet")
+                    val link = fileObj.optString("webViewLink", "https://docs.google.com/spreadsheets/d/$id/edit")
+                    items.add(GoogleSheetItem(id = id, name = name, webViewLink = link))
+                }
+                Result.success(items)
+            } else {
+                Result.failure(Exception("Drive search failed (HTTP ${res.code})"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Creates a new dedicated spreadsheet in the authenticated user's Google Drive.
      */
     suspend fun createSpreadsheetInUserDrive(title: String): Result<String> = withContext(Dispatchers.IO) {
@@ -198,7 +262,7 @@ class GoogleSheetsSyncManager(
             ?: return@withContext Result.failure(Exception("No Google account connected. Please authenticate first."))
 
         val token = getAccessToken()
-            ?: return@withContext Result.failure(Exception("Unable to acquire Google OAuth token. Please ensure Google Cloud Console OAuth consent screen is configured."))
+            ?: return@withContext Result.failure(Exception("Unable to acquire Google OAuth token."))
 
         try {
             val finalTitle = title.trim().ifBlank { DEFAULT_SPREADSHEET_TITLE }
@@ -218,7 +282,8 @@ class GoogleSheetsSyncManager(
             if (response.isSuccessful) {
                 val resJson = JSONObject(response.body?.string() ?: "{}")
                 val newSheetId = resJson.getString("spreadsheetId")
-                setSpreadsheet(newSheetId, finalTitle)
+                val sheetUrl = resJson.optString("spreadsheetUrl", "https://docs.google.com/spreadsheets/d/$newSheetId/edit")
+                setSpreadsheet(newSheetId, finalTitle, sheetUrl, "created")
                 Result.success(newSheetId)
             } else {
                 val errBody = response.body?.string() ?: ""
@@ -230,7 +295,7 @@ class GoogleSheetsSyncManager(
     }
 
     /**
-     * Verifies that the authenticated user has access to an existing spreadsheet and connects it.
+     * Verifies that the authenticated user has access to an existing spreadsheet, extracts its metadata, and connects it.
      */
     suspend fun verifyAndConnectExistingSpreadsheet(spreadsheetId: String): Result<String> = withContext(Dispatchers.IO) {
         val activeEmail = _syncStatus.value.accountEmail
@@ -246,7 +311,7 @@ class GoogleSheetsSyncManager(
 
         try {
             val request = Request.Builder()
-                .url("https://sheets.googleapis.com/v4/spreadsheets/$cleanId?fields=properties.title")
+                .url("https://sheets.googleapis.com/v4/spreadsheets/$cleanId?fields=properties.title,spreadsheetUrl")
                 .addHeader("Authorization", "Bearer $token")
                 .get()
                 .build()
@@ -255,7 +320,8 @@ class GoogleSheetsSyncManager(
             if (response.isSuccessful) {
                 val resJson = JSONObject(response.body?.string() ?: "{}")
                 val title = resJson.optJSONObject("properties")?.optString("title") ?: "Existing Spreadsheet"
-                setSpreadsheet(cleanId, title)
+                val sheetUrl = resJson.optString("spreadsheetUrl", "https://docs.google.com/spreadsheets/d/$cleanId/edit")
+                setSpreadsheet(cleanId, title, sheetUrl, "existing")
                 Result.success(title)
             } else {
                 Result.failure(Exception("Cannot access spreadsheet (HTTP ${response.code}). Make sure $activeEmail has permission."))
@@ -283,6 +349,8 @@ class GoogleSheetsSyncManager(
             accountEmail = null,
             spreadsheetId = null,
             spreadsheetTitle = null,
+            spreadsheetUrl = null,
+            spreadsheetType = null,
             pendingCount = 0,
             lastSyncTime = null,
             errorMessage = null
@@ -292,19 +360,29 @@ class GoogleSheetsSyncManager(
     /**
      * Stores the selected spreadsheet for the active user.
      */
-    fun setSpreadsheet(spreadsheetId: String, title: String = DEFAULT_SPREADSHEET_TITLE) {
+    fun setSpreadsheet(
+        spreadsheetId: String,
+        title: String = DEFAULT_SPREADSHEET_TITLE,
+        url: String? = null,
+        type: String = "existing"
+    ) {
         val activeEmail = _syncStatus.value.accountEmail ?: return
         val cleanId = spreadsheetId.trim()
         val cleanTitle = title.trim().ifBlank { DEFAULT_SPREADSHEET_TITLE }
+        val finalUrl = url ?: "https://docs.google.com/spreadsheets/d/$cleanId/edit"
 
         prefs.edit()
             .putString("sheet_id_$activeEmail", cleanId)
             .putString("sheet_title_$activeEmail", cleanTitle)
+            .putString("sheet_url_$activeEmail", finalUrl)
+            .putString("sheet_type_$activeEmail", type)
             .apply()
 
         _syncStatus.value = _syncStatus.value.copy(
             spreadsheetId = cleanId,
             spreadsheetTitle = cleanTitle,
+            spreadsheetUrl = finalUrl,
+            spreadsheetType = type,
             state = SyncState.PENDING,
             errorMessage = null
         )
@@ -318,6 +396,13 @@ class GoogleSheetsSyncManager(
         val activeNetwork = cm.activeNetwork ?: return false
         val capabilities = cm.getNetworkCapabilities(activeNetwork) ?: return false
         return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    fun isSpreadsheetConnected(): Boolean {
+        val status = _syncStatus.value
+        return status.state != SyncState.NOT_CONNECTED &&
+                !status.spreadsheetId.isNullOrBlank() &&
+                !status.accountEmail.isNullOrBlank()
     }
 
     private fun registerNetworkCallback() {
@@ -448,13 +533,15 @@ class GoogleSheetsSyncManager(
                 val rows = JSONArray()
                 for (item in items) {
                     if (!item.isDeleted) {
+                        val txnId = if (item.transactionId.isNotBlank()) item.transactionId else "TXN-${item.id}"
                         val row = JSONArray().apply {
-                            put(item.id)
+                            put(txnId)
                             put(item.date)
                             put(item.time)
-                            put(item.amount)
+                            put(if (item.transactionType == "CREDIT") "Credit" else "Expense")
                             put(item.category)
                             put(item.note)
+                            put(item.amount)
                         }
                         rows.put(row)
                     }
@@ -466,7 +553,7 @@ class GoogleSheetsSyncManager(
                     }.toString().toRequestBody("application/json".toMediaType())
 
                     val appendReq = Request.Builder()
-                        .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values/$encodedTab!A:F:append?valueInputOption=USER_ENTERED")
+                        .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values/$encodedTab!A:G:append?valueInputOption=USER_ENTERED")
                         .addHeader("Authorization", "Bearer $accessToken")
                         .post(appendBody)
                         .build()
@@ -535,18 +622,19 @@ class GoogleSheetsSyncManager(
                     val headerBody = JSONObject().apply {
                         put("values", JSONArray().apply {
                             put(JSONArray().apply {
-                                put("ID")
+                                put("Transaction ID")
                                 put("Date")
                                 put("Time")
-                                put("Amount")
+                                put("Type")
                                 put("Category")
                                 put("Note")
+                                put("Amount")
                             })
                         })
                     }.toString().toRequestBody("application/json".toMediaType())
 
                     val headerReq = Request.Builder()
-                        .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values/$encodedTab!A1:F1:append?valueInputOption=USER_ENTERED")
+                        .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values/$encodedTab!A1:G1:append?valueInputOption=USER_ENTERED")
                         .addHeader("Authorization", "Bearer $accessToken")
                         .post(headerBody)
                         .build()
@@ -556,6 +644,208 @@ class GoogleSheetsSyncManager(
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    data class FoundRowInfo(
+        val sheetIdInt: Int,
+        val rowIndex: Int, // 0-based row index in Google Sheet
+        val tabTitle: String
+    )
+
+    /**
+     * Finds the exact Google Sheet row for a given transaction by searching Column A
+     * for its unique Transaction ID (or fallback numeric ID for legacy entries).
+     * Returns FoundRowInfo(sheetIdInt, rowIndex, tabTitle) or null if not found.
+     */
+    suspend fun findTransactionRow(expense: Expense): FoundRowInfo? = withContext(Dispatchers.IO) {
+        val sheetId = _syncStatus.value.spreadsheetId ?: return@withContext null
+        val token = getAccessToken() ?: return@withContext null
+
+        val targetTxnId = expense.transactionId.trim()
+        val targetOldId = expense.id.toString()
+        val targetAltId = "TXN-${expense.id}"
+
+        // Fetch sheet tabs metadata
+        val metaReq = Request.Builder()
+            .url("https://sheets.googleapis.com/v4/spreadsheets/$sheetId?fields=sheets.properties(sheetId,title)")
+            .addHeader("Authorization", "Bearer $token")
+            .get()
+            .build()
+
+        val metaRes = client.newCall(metaReq).execute()
+        if (!metaRes.isSuccessful) {
+            throw Exception("Failed to fetch spreadsheet metadata (HTTP ${metaRes.code})")
+        }
+
+        val metaJson = JSONObject(metaRes.body?.string() ?: "{}")
+        val sheetsArr = metaJson.optJSONArray("sheets") ?: JSONArray()
+        if (sheetsArr.length() == 0) return@withContext null
+
+        val expectedMonthTab = if (expense.date.length >= 7) {
+            Formatters.formatMonthYear(expense.date.substring(0, 7))
+        } else null
+
+        // Order tabs: expected month tab first, then the rest
+        val orderedSheets = mutableListOf<JSONObject>()
+        for (i in 0 until sheetsArr.length()) {
+            val sheetObj = sheetsArr.getJSONObject(i).getJSONObject("properties")
+            val title = sheetObj.getString("title")
+            if (expectedMonthTab != null && title.equals(expectedMonthTab, ignoreCase = true)) {
+                orderedSheets.add(0, sheetObj)
+            } else {
+                orderedSheets.add(sheetObj)
+            }
+        }
+
+        for (sheetObj in orderedSheets) {
+            val sId = sheetObj.getInt("sheetId")
+            val sTitle = sheetObj.getString("title")
+            val encodedTitle = URLEncoder.encode(sTitle, "UTF-8")
+
+            val colAReq = Request.Builder()
+                .url("https://sheets.googleapis.com/v4/spreadsheets/$sheetId/values/$encodedTitle!A:A")
+                .addHeader("Authorization", "Bearer $token")
+                .get()
+                .build()
+
+            val colARes = client.newCall(colAReq).execute()
+            if (!colARes.isSuccessful) continue
+
+            val colAJson = JSONObject(colARes.body?.string() ?: "{}")
+            val valuesArr = colAJson.optJSONArray("values") ?: JSONArray()
+
+            // rowIndex is 0-based in Google Sheet (row 0 is header row 1)
+            for (rowIndex in 0 until valuesArr.length()) {
+                val rowArr = valuesArr.optJSONArray(rowIndex) ?: continue
+                if (rowArr.length() > 0) {
+                    val cellVal = rowArr.optString(0, "").trim()
+                    val matchesTxnId = targetTxnId.isNotEmpty() && cellVal.equals(targetTxnId, ignoreCase = true)
+                    val matchesOldId = cellVal == targetOldId || cellVal.equals(targetAltId, ignoreCase = true)
+                    if (matchesTxnId || matchesOldId) {
+                        return@withContext FoundRowInfo(
+                            sheetIdInt = sId,
+                            rowIndex = rowIndex,
+                            tabTitle = sTitle
+                        )
+                    }
+                }
+            }
+        }
+
+        null
+    }
+
+    /**
+     * Deletes the exact row matching the transaction from the connected Google Sheet.
+     * Uses deleteDimension API to ensure precise row deletion by unique Transaction ID.
+     */
+    suspend fun deleteTransactionFromSheet(expense: Expense): Result<Unit> = withContext(Dispatchers.IO) {
+        val sheetId = _syncStatus.value.spreadsheetId
+            ?: return@withContext Result.failure(Exception("No connected spreadsheet found."))
+
+        if (!isOnline()) {
+            return@withContext Result.failure(Exception("Network is offline. Cannot communicate with Google Sheets."))
+        }
+
+        val token = getAccessToken()
+            ?: return@withContext Result.failure(Exception("Authentication token expired or unavailable."))
+
+        try {
+            val foundRow = findTransactionRow(expense)
+            if (foundRow == null) {
+                // If not found in any tab, the row is already deleted/absent in Google Sheets.
+                return@withContext Result.success(Unit)
+            }
+
+            // Execute deleteDimension for exact row: [startIndex, endIndex)
+            val batchBody = JSONObject().apply {
+                val requests = JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("deleteDimension", JSONObject().apply {
+                            put("range", JSONObject().apply {
+                                put("sheetId", foundRow.sheetIdInt)
+                                put("dimension", "ROWS")
+                                put("startIndex", foundRow.rowIndex)
+                                put("endIndex", foundRow.rowIndex + 1)
+                            })
+                        })
+                    })
+                }
+                put("requests", requests)
+            }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+
+            val deleteReq = Request.Builder()
+                .url("https://sheets.googleapis.com/v4/spreadsheets/$sheetId:batchUpdate")
+                .addHeader("Authorization", "Bearer $token")
+                .post(batchBody)
+                .build()
+
+            val deleteRes = client.newCall(deleteReq).execute()
+            if (deleteRes.isSuccessful) {
+                Result.success(Unit)
+            } else {
+                val errBody = deleteRes.body?.string() ?: ""
+                Result.failure(Exception("Google Sheets API delete error (${deleteRes.code}): $errBody"))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Prepares for future editing by updating an existing row in Google Sheets
+     * without creating duplicates.
+     */
+    suspend fun updateTransactionInSheet(expense: Expense): Result<Unit> = withContext(Dispatchers.IO) {
+        val sheetId = _syncStatus.value.spreadsheetId
+            ?: return@withContext Result.failure(Exception("No connected spreadsheet found."))
+
+        if (!isOnline()) {
+            return@withContext Result.failure(Exception("Network is offline."))
+        }
+
+        val token = getAccessToken()
+            ?: return@withContext Result.failure(Exception("Authentication token expired."))
+
+        try {
+            val foundRow = findTransactionRow(expense)
+                ?: return@withContext Result.failure(Exception("Transaction row not found in Google Sheets."))
+
+            val encodedTab = URLEncoder.encode(foundRow.tabTitle, "UTF-8")
+            val rowNumber = foundRow.rowIndex + 1 // 1-based row number for A1 notation
+
+            val txnId = if (expense.transactionId.isNotBlank()) expense.transactionId else "TXN-${expense.id}"
+            val updateBody = JSONObject().apply {
+                put("values", JSONArray().apply {
+                    put(JSONArray().apply {
+                        put(txnId)
+                        put(expense.date)
+                        put(expense.time)
+                        put(if (expense.transactionType == "CREDIT") "Credit" else "Expense")
+                        put(expense.category)
+                        put(expense.note)
+                        put(expense.amount)
+                    })
+                })
+            }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+
+            val updateReq = Request.Builder()
+                .url("https://sheets.googleapis.com/v4/spreadsheets/$sheetId/values/$encodedTab!A$rowNumber:G$rowNumber?valueInputOption=USER_ENTERED")
+                .addHeader("Authorization", "Bearer $token")
+                .put(updateBody)
+                .build()
+
+            val updateRes = client.newCall(updateReq).execute()
+            if (updateRes.isSuccessful) {
+                Result.success(Unit)
+            } else {
+                Result.failure(Exception("Update row failed (HTTP ${updateRes.code})"))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Result.failure(e)
         }
     }
 
