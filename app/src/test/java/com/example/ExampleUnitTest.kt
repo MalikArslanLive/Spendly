@@ -2,6 +2,7 @@ package com.example
 
 import com.example.data.Expense
 import com.example.sync.GoogleSheetsSyncManager
+import com.example.ui.screens.extractSpreadsheetIdFromUrl
 import com.example.util.CsvExporter
 import com.example.util.Formatters
 import org.junit.Assert.assertEquals
@@ -61,5 +62,17 @@ class ExampleUnitTest {
         assertEquals("October 2026", monthTab)
         val novTab = Formatters.formatMonthYear("2026-11")
         assertEquals("November 2026", novTab)
+    }
+
+    @Test
+    fun testExtractSpreadsheetIdFromUrl() {
+        val fullUrl = "https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit#gid=0"
+        assertEquals("1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms", extractSpreadsheetIdFromUrl(fullUrl))
+
+        val simpleUrl = "https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+        assertEquals("1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms", extractSpreadsheetIdFromUrl(simpleUrl))
+
+        val rawId = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+        assertEquals("1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms", extractSpreadsheetIdFromUrl(rawId))
     }
 }

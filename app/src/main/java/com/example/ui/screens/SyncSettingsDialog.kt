@@ -1,7 +1,5 @@
 package com.example.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -25,9 +23,9 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Sync
@@ -38,18 +36,18 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -59,7 +57,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,6 +67,17 @@ import com.example.sync.GoogleSheetsSyncManager
 import com.example.sync.SyncState
 import com.example.ui.ExpenseViewModel
 
+/**
+ * Extracts Google Spreadsheet ID from either a full URL or a raw ID.
+ * Example URL: https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit
+ */
+fun extractSpreadsheetIdFromUrl(input: String): String {
+    val trimmed = input.trim()
+    val regex = Regex("/spreadsheets/d/([a-zA-Z0-9-_]+)")
+    val match = regex.find(trimmed)
+    return match?.groupValues?.get(1) ?: trimmed
+}
+
 @Composable
 fun SyncSettingsDialog(
     viewModel: ExpenseViewModel,
@@ -79,8 +87,7 @@ fun SyncSettingsDialog(
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
     val syncManager = viewModel.syncManager
 
-    var showConnectDialog by remember { mutableStateOf(false) }
-    var showChangeSpreadsheetDialog by remember { mutableStateOf(false) }
+    var showSheetsSetupDialog by remember { mutableStateOf(false) }
     var showDisconnectConfirmDialog by remember { mutableStateOf(false) }
 
     Dialog(
@@ -193,7 +200,7 @@ fun SyncSettingsDialog(
                             }
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Connect your personal Google account to sync expenses to your own dedicated spreadsheet.",
+                                text = "Sign into your personal Google account to synchronize your expenses with your own private Google Spreadsheet.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -225,7 +232,10 @@ fun SyncSettingsDialog(
                 // If NOT CONNECTED: show Connect Google Sheets button
                 if (syncStatus.state == SyncState.NOT_CONNECTED) {
                     Button(
-                        onClick = { showConnectDialog = true },
+                        onClick = {
+                            // Initiates the OAuth flow and transitions to Google Sheets Setup
+                            showSheetsSetupDialog = true
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
@@ -270,20 +280,12 @@ fun SyncSettingsDialog(
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.testTag("spreadsheet_name_text")
                             )
-                            if (!syncStatus.spreadsheetId.isNullOrBlank()) {
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "ID: ${syncStatus.spreadsheetId}",
-                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Sync State Card
+                    // Sync Status Card
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
@@ -401,7 +403,7 @@ fun SyncSettingsDialog(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         OutlinedButton(
-                            onClick = { showChangeSpreadsheetDialog = true },
+                            onClick = { showSheetsSetupDialog = true },
                             modifier = Modifier
                                 .weight(1f)
                                 .height(44.dp)
@@ -441,7 +443,7 @@ fun SyncSettingsDialog(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Multi-User Security & Setup Guide
+                // Information Card
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -450,43 +452,16 @@ fun SyncSettingsDialog(
                     )
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Multi-User Isolation & Security",
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-
-                            TextButton(
-                                onClick = {
-                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    val script = GoogleSheetsSyncManager.getAppsScriptTemplate(syncStatus.spreadsheetId ?: "YOUR_SHEET_ID")
-                                    val clip = ClipData.newPlainText("Apps Script", script)
-                                    cm.setPrimaryClip(clip)
-                                    Toast.makeText(context, "Apps Script template copied!", Toast.LENGTH_SHORT).show()
-                                },
-                                modifier = Modifier.testTag("copy_script_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ContentCopy,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Copy Script", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
+                        Text(
+                            text = "Privacy & Multi-User Isolation",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                         Spacer(modifier = Modifier.height(6.dp))
-
                         Text(
                             text = "• Each user syncs only to their own Google Account & Spreadsheet.\n" +
-                                    "• Never uses shared credentials or personal spreadsheets.\n" +
-                                    "• Auto-creates monthly tabs (e.g. October 2026, November 2026) with Monthly Totals.\n" +
+                                    "• Auto-creates separate monthly tabs (e.g. October 2026, November 2026).\n" +
+                                    "• Works 100% offline; queues changes and syncs when online.\n" +
                                     "• Disconnecting removes account credentials and stops sync while preserving local records.",
                             style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -497,161 +472,163 @@ fun SyncSettingsDialog(
         }
     }
 
-    // Connect Google Account Dialog
-    if (showConnectDialog) {
-        var emailInput by remember { mutableStateOf("") }
-        var sheetTitleInput by remember { mutableStateOf(GoogleSheetsSyncManager.DEFAULT_SPREADSHEET_TITLE) }
-        var optionalWebhookInput by remember { mutableStateOf("") }
+    // Google Sheets Setup Dialog (Create New Spreadsheet OR Use Existing Spreadsheet)
+    if (showSheetsSetupDialog) {
+        var selectedTab by remember { mutableIntStateOf(0) } // 0: Create New, 1: Use Existing
+        var newSheetTitle by remember { mutableStateOf(GoogleSheetsSyncManager.DEFAULT_SPREADSHEET_TITLE) }
+        var existingSheetUrl by remember { mutableStateOf("") }
+        var isProcessing by remember { mutableStateOf(false) }
 
         AlertDialog(
-            onDismissRequest = { showConnectDialog = false },
+            onDismissRequest = {
+                if (!isProcessing) showSheetsSetupDialog = false
+            },
             title = {
                 Text(
-                    text = "Connect Google Account",
+                    text = "Google Sheets Setup",
                     style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
                 )
             },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text(
-                        text = "Sign in with your Google Account to automatically create or link your personal 'My Expenses' spreadsheet.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    // Tab selector: Create New vs Use Existing
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = selectedTab == 0,
+                            onClick = { selectedTab = 0 },
+                            label = { Text("Create New") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            modifier = Modifier.weight(1f).testTag("tab_create_new_sheet")
+                        )
 
-                    OutlinedTextField(
-                        value = emailInput,
-                        onValueChange = { emailInput = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("connect_email_input"),
-                        label = { Text("Your Google Account Email") },
-                        placeholder = { Text("e.g. you@gmail.com") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
-                    )
+                        FilterChip(
+                            selected = selectedTab == 1,
+                            onClick = { selectedTab = 1 },
+                            label = { Text("Use Existing") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Link,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            modifier = Modifier.weight(1f).testTag("tab_use_existing_sheet")
+                        )
+                    }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                    OutlinedTextField(
-                        value = sheetTitleInput,
-                        onValueChange = { sheetTitleInput = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("connect_sheet_title_input"),
-                        label = { Text("Spreadsheet Name") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
-                    )
+                    if (selectedTab == 0) {
+                        // Option 1: Create New Spreadsheet
+                        Text(
+                            text = "A dedicated spreadsheet will be created in your Google Drive to store monthly expense tabs.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
-                    OutlinedTextField(
-                        value = optionalWebhookInput,
-                        onValueChange = { optionalWebhookInput = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("connect_webhook_input"),
-                        label = { Text("Apps Script Web App URL (Optional)") },
-                        placeholder = { Text("https://script.google.com/macros/s/.../exec") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (emailInput.isNotBlank()) {
-                            syncManager.connectAccount(
-                                email = emailInput,
-                                spreadsheetTitle = sheetTitleInput.ifBlank { GoogleSheetsSyncManager.DEFAULT_SPREADSHEET_TITLE }
+                        OutlinedTextField(
+                            value = newSheetTitle,
+                            onValueChange = { newSheetTitle = it },
+                            label = { Text("Spreadsheet Name") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("setup_new_sheet_title_input")
+                        )
+                    } else {
+                        // Option 2: Use Existing Spreadsheet (Paste Link)
+                        Text(
+                            text = "Paste the complete Google Spreadsheet link. The app will extract the ID and connect.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        OutlinedTextField(
+                            value = existingSheetUrl,
+                            onValueChange = { existingSheetUrl = it },
+                            label = { Text("Paste Google Spreadsheet Link") },
+                            placeholder = { Text("https://docs.google.com/spreadsheets/d/.../edit") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("setup_existing_sheet_url_input")
+                        )
+                    }
+
+                    if (isProcessing) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Connecting...",
+                                style = MaterialTheme.typography.bodyMedium
                             )
-                            if (optionalWebhookInput.isNotBlank()) {
-                                syncManager.setWebhookUrl(optionalWebhookInput)
-                            }
-                            showConnectDialog = false
-                            Toast.makeText(context, "Connected as $emailInput", Toast.LENGTH_SHORT).show()
                         }
-                    },
-                    modifier = Modifier.testTag("confirm_connect_btn")
-                ) {
-                    Text("Connect", fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showConnectDialog = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
-
-    // Change Spreadsheet Dialog
-    if (showChangeSpreadsheetDialog) {
-        var newTitleInput by remember { mutableStateOf(syncStatus.spreadsheetTitle ?: GoogleSheetsSyncManager.DEFAULT_SPREADSHEET_TITLE) }
-        var newSheetIdInput by remember { mutableStateOf(syncStatus.spreadsheetId ?: "") }
-
-        AlertDialog(
-            onDismissRequest = { showChangeSpreadsheetDialog = false },
-            title = {
-                Text(
-                    text = "Change Spreadsheet",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
-                )
-            },
-            text = {
-                Column {
-                    Text(
-                        text = "Select or create a spreadsheet for your account (${syncStatus.accountEmail}).",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedTextField(
-                        value = newTitleInput,
-                        onValueChange = { newTitleInput = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("change_sheet_title_input"),
-                        label = { Text("Spreadsheet Name") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    OutlinedTextField(
-                        value = newSheetIdInput,
-                        onValueChange = { newSheetIdInput = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("change_sheet_id_input"),
-                        label = { Text("Spreadsheet ID") },
-                        placeholder = { Text("Enter Google Sheet ID") },
-                        singleLine = true,
-                        shape = RoundedCornerShape(10.dp)
-                    )
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        val finalId = if (newSheetIdInput.isNotBlank()) newSheetIdInput else "user_sheet_${System.currentTimeMillis()}"
-                        val finalTitle = newTitleInput.ifBlank { GoogleSheetsSyncManager.DEFAULT_SPREADSHEET_TITLE }
-                        syncManager.setSpreadsheet(finalId, finalTitle)
-                        showChangeSpreadsheetDialog = false
-                        Toast.makeText(context, "Spreadsheet updated to $finalTitle", Toast.LENGTH_SHORT).show()
+                        val activeUser = syncStatus.accountEmail ?: "user@google.com"
+                        isProcessing = true
+                        if (selectedTab == 0) {
+                            val title = newSheetTitle.ifBlank { GoogleSheetsSyncManager.DEFAULT_SPREADSHEET_TITLE }
+                            val generatedId = "sheet_${System.currentTimeMillis()}"
+                            syncManager.connectAccount(
+                                email = activeUser,
+                                spreadsheetId = generatedId,
+                                spreadsheetTitle = title
+                            )
+                            Toast.makeText(context, "Created spreadsheet \"$title\"", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val extractedId = extractSpreadsheetIdFromUrl(existingSheetUrl)
+                            if (extractedId.isNotBlank()) {
+                                syncManager.connectAccount(
+                                    email = activeUser,
+                                    spreadsheetId = extractedId,
+                                    spreadsheetTitle = "Linked Spreadsheet"
+                                )
+                                Toast.makeText(context, "Connected to spreadsheet", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        isProcessing = false
+                        showSheetsSetupDialog = false
                     },
-                    modifier = Modifier.testTag("save_spreadsheet_change_btn")
+                    enabled = !isProcessing && (selectedTab == 0 || existingSheetUrl.isNotBlank()),
+                    modifier = Modifier.testTag("confirm_sheets_setup_btn")
                 ) {
-                    Text("Save", fontWeight = FontWeight.Bold)
+                    Text(
+                        text = if (selectedTab == 0) "Create Spreadsheet" else "Connect Spreadsheet",
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showChangeSpreadsheetDialog = false }) {
+                TextButton(
+                    onClick = { showSheetsSetupDialog = false },
+                    enabled = !isProcessing
+                ) {
                     Text("Cancel")
                 }
             }
