@@ -6,6 +6,10 @@ class ExpenseRepository(private val expenseDao: ExpenseDao) {
 
     val allExpenses: Flow<List<Expense>> = expenseDao.getAllExpenses()
 
+    val trashExpenses: Flow<List<Expense>> = expenseDao.getTrashExpenses()
+
+    val trashCount: Flow<Int> = expenseDao.getTrashCount()
+
     fun getExpensesByDate(date: String): Flow<List<Expense>> {
         return expenseDao.getExpensesByDate(date)
     }
@@ -26,23 +30,43 @@ class ExpenseRepository(private val expenseDao: ExpenseDao) {
         expenseDao.updateExpense(expense)
     }
 
-    suspend fun deleteExpense(expense: Expense) {
-        expenseDao.deleteExpense(expense)
+    suspend fun moveToTrash(id: Long) {
+        expenseDao.moveToTrash(id, System.currentTimeMillis())
     }
 
-    suspend fun deleteExpenseById(id: Long) {
-        expenseDao.deleteExpenseById(id)
+    suspend fun moveAllToTrash() {
+        expenseDao.moveAllToTrash(System.currentTimeMillis())
     }
 
-    suspend fun insertAll(expenses: List<Expense>) {
-        expenseDao.insertAll(expenses)
+    suspend fun restoreFromTrash(id: Long) {
+        expenseDao.restoreFromTrash(id)
     }
 
-    suspend fun deleteAll() {
-        expenseDao.deleteAllExpenses()
+    suspend fun deletePermanently(id: Long) {
+        expenseDao.deletePermanently(id)
     }
 
-    suspend fun getCount(): Int {
-        return expenseDao.getExpenseCount()
+    suspend fun emptyTrash() {
+        expenseDao.emptyTrash()
+    }
+
+    suspend fun getAllActiveExpensesList(): List<Expense> {
+        return expenseDao.getAllActiveExpensesList()
+    }
+
+    suspend fun getPendingSyncExpenses(): List<Expense> {
+        return expenseDao.getPendingSyncExpenses()
+    }
+
+    suspend fun markExpensesSynced(ids: List<Long>) {
+        expenseDao.markExpensesSynced(ids)
+    }
+
+    suspend fun updateSyncStatus(id: Long, status: String) {
+        expenseDao.updateSyncStatus(id, status, System.currentTimeMillis())
+    }
+
+    suspend fun getActiveCount(): Int {
+        return expenseDao.getActiveExpenseCount()
     }
 }

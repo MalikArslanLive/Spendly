@@ -12,5 +12,9 @@ data class Expense(
     val note: String = "",
     val date: String, // Format: YYYY-MM-DD (e.g. "2026-10-05")
     val time: String, // Format: e.g. "03:45 PM"
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val isDeleted: Boolean = false,
+    val deletedAt: Long? = null,
+    val syncStatus: String = "PENDING", // PENDING, SYNCED, FAILED
+    val lastSyncedAt: Long? = null
 )

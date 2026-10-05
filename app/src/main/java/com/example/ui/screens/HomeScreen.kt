@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,13 +21,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Receipt
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,12 +56,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.Expense
+import com.example.sync.SyncState
 import com.example.ui.ExpenseViewModel
 import com.example.ui.components.ExpenseItemCard
 import com.example.util.Formatters
@@ -61,11 +72,16 @@ import com.example.util.Formatters
 fun HomeScreen(
     viewModel: ExpenseViewModel,
     onAddExpenseClick: () -> Unit,
+    onOpenTrash: () -> Unit,
+    onOpenSyncSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val todayExpenses by viewModel.todayExpenses.collectAsStateWithLifecycle()
     val todayTotal by viewModel.todayTotal.collectAsStateWithLifecycle()
     val thisMonthTotal by viewModel.thisMonthTotal.collectAsStateWithLifecycle()
+    val trashCount by viewModel.trashCount.collectAsStateWithLifecycle()
+    val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
 
     var showMenu by remember { mutableStateOf(false) }
 
@@ -94,6 +110,106 @@ fun HomeScreen(
                 }
             },
             actions = {
+                // Sync status indicator chip
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = when (syncStatus.state) {
+                        SyncState.SYNCED -> Color(0xFFD1FAE5)
+                        SyncState.PENDING -> Color(0xFFFEF3C7)
+                        SyncState.SYNCING -> Color(0xFFDBEAFE)
+                        SyncState.FAILED -> Color(0xFFFEE2E2)
+                        SyncState.NOT_CONNECTED -> MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable { onOpenSyncSettings() }
+                        .testTag("sync_status_badge")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        when (syncStatus.state) {
+                            SyncState.NOT_CONNECTED -> {
+                                Icon(
+                                    imageVector = Icons.Default.Sync,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Not Connected",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            SyncState.SYNCED -> {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = Color(0xFF059669),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Synced",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF065F46)
+                                )
+                            }
+                            SyncState.PENDING -> {
+                                Icon(
+                                    imageVector = Icons.Default.Sync,
+                                    contentDescription = null,
+                                    tint = Color(0xFFD97706),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Sync Pending",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF92400E)
+                                )
+                            }
+                            SyncState.SYNCING -> {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color(0xFF1D4ED8)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Syncing",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF1E40AF)
+                                )
+                            }
+                            SyncState.FAILED -> {
+                                Icon(
+                                    imageVector = Icons.Default.Error,
+                                    contentDescription = null,
+                                    tint = Color(0xFFDC2626),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Sync Failed",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF991B1B)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
                 Box {
                     IconButton(
                         onClick = { showMenu = true },
@@ -111,17 +227,69 @@ fun HomeScreen(
                         onDismissRequest = { showMenu = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Add Sample Expenses") },
+                            text = { Text("Google Sheets Sync") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.TableChart,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
                             onClick = {
-                                viewModel.seedDemoExpenses()
+                                onOpenSyncSettings()
                                 showMenu = false
                             },
-                            modifier = Modifier.testTag("menu_seed_demo")
+                            modifier = Modifier.testTag("menu_google_sheets_sync")
                         )
+
+                        DropdownMenuItem(
+                            text = { Text("Export CSV") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.FileDownload,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            },
+                            onClick = {
+                                showMenu = false
+                                val success = viewModel.exportCsv(context)
+                                if (!success) {
+                                    Toast.makeText(context, "No active expenses to export", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.testTag("menu_export_csv")
+                        )
+
+                        DropdownMenuItem(
+                            text = {
+                                Text(if (trashCount > 0) "Trash ($trashCount)" else "Trash")
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteOutline,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            },
+                            onClick = {
+                                onOpenTrash()
+                                showMenu = false
+                            },
+                            modifier = Modifier.testTag("menu_open_trash")
+                        )
+
                         DropdownMenuItem(
                             text = { Text("Clear All Data", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.DeleteSweep,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            },
                             onClick = {
-                                viewModel.clearAllData()
+                                viewModel.promptClearAllData()
                                 showMenu = false
                             },
                             modifier = Modifier.testTag("menu_clear_data")

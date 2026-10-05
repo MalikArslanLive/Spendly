@@ -1,10 +1,14 @@
 package com.example.ui
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.Expense
 import com.example.data.ExpenseRepository
+import com.example.sync.GoogleSheetsSyncManager
+import com.example.sync.SyncStatus
+import com.example.util.CsvExporter
 import com.example.util.Formatters
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -35,14 +39,35 @@ data class MonthlyReportData(
     val daySummaries: List<DayExpenseSummary>
 )
 
-class ExpenseViewModel(private val repository: ExpenseRepository) : ViewModel() {
+class ExpenseViewModel(
+    private val repository: ExpenseRepository,
+    val syncManager: GoogleSheetsSyncManager
+) : ViewModel() {
 
+    // Active expenses (excludes trashed/deleted)
     val allExpenses: StateFlow<List<Expense>> = repository.allExpenses
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    // Trashed expenses
+    val trashExpenses: StateFlow<List<Expense>> = repository.trashExpenses
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+
+    val trashCount: StateFlow<Int> = repository.trashCount
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = 0
+        )
+
+    val syncStatus: StateFlow<SyncStatus> = syncManager.syncStatus
 
     private val _selectedDate = MutableStateFlow(Formatters.todayDateString())
     val selectedDate: StateFlow<String> = _selectedDate.asStateFlow()
@@ -57,18 +82,17 @@ class ExpenseViewModel(private val repository: ExpenseRepository) : ViewModel() 
     private val _isAddEditOpen = MutableStateFlow(false)
     val isAddEditOpen: StateFlow<Boolean> = _isAddEditOpen.asStateFlow()
 
-    // Confirm delete dialog state
+    // Confirm delete dialog state (moves to trash)
     private val _expenseToDelete = MutableStateFlow<Expense?>(null)
     val expenseToDelete: StateFlow<Expense?> = _expenseToDelete.asStateFlow()
 
-    init {
-        // Automatically check if database is empty on initial launch and seed demo expenses
-        viewModelScope.launch {
-            if (repository.getCount() == 0) {
-                seedDemoExpenses()
-            }
-        }
-    }
+    // Confirm Clear Data dialog state (moves all to trash)
+    private val _isClearDataConfirmOpen = MutableStateFlow(false)
+    val isClearDataConfirmOpen: StateFlow<Boolean> = _isClearDataConfirmOpen.asStateFlow()
+
+    // Sync settings dialog state
+    private val _isSyncSettingsOpen = MutableStateFlow(false)
+    val isSyncSettingsOpen: StateFlow<Boolean> = _isSyncSettingsOpen.asStateFlow()
 
     // Derived: Today's expenses
     val todayExpenses: StateFlow<List<Expense>> = allExpenses
@@ -118,7 +142,7 @@ class ExpenseViewModel(private val repository: ExpenseRepository) : ViewModel() 
             initialValue = 0.0
         )
 
-    // Derived: Set of dates with expenses (for Calendar dots)
+    // Derived: Set of dates with active expenses (for Calendar dots)
     val datesWithExpenses: StateFlow<Set<String>> = allExpenses
         .combine(MutableStateFlow(Unit)) { expenses, _ ->
             expenses.map { it.date }.toSet()
@@ -182,7 +206,6 @@ class ExpenseViewModel(private val repository: ExpenseRepository) : ViewModel() 
     // Actions
     fun selectDate(date: String) {
         _selectedDate.value = date
-        // Also update month if date is in different month
         val dateMonth = if (date.length >= 7) date.substring(0, 7) else _selectedMonth.value
         _selectedMonth.value = dateMonth
     }
@@ -232,7 +255,10 @@ class ExpenseViewModel(private val repository: ExpenseRepository) : ViewModel() 
                 category = category,
                 note = note.trim(),
                 date = date,
-                time = time
+                time = time,
+                isDeleted = false,
+                deletedAt = null,
+                syncStatus = "PENDING"
             )
             if (id == 0L) {
                 repository.insertExpense(expense)
@@ -240,6 +266,8 @@ class ExpenseViewModel(private val repository: ExpenseRepository) : ViewModel() 
                 repository.updateExpense(expense)
             }
             closeAddEditDialog()
+            syncManager.checkPendingCount()
+            syncManager.syncNow()
         }
     }
 
@@ -251,63 +279,90 @@ class ExpenseViewModel(private val repository: ExpenseRepository) : ViewModel() 
         _expenseToDelete.value = null
     }
 
+    // Moves single expense to trash
     fun confirmDeleteExpense() {
         val expense = _expenseToDelete.value ?: return
         viewModelScope.launch {
-            repository.deleteExpense(expense)
+            repository.moveToTrash(expense.id)
             _expenseToDelete.value = null
             if (_editingExpense.value?.id == expense.id) {
                 closeAddEditDialog()
             }
+            syncManager.checkPendingCount()
+            syncManager.syncNow()
         }
     }
 
-    fun clearAllData() {
+    // Safe Clear Data
+    fun promptClearAllData() {
+        _isClearDataConfirmOpen.value = true
+    }
+
+    fun dismissClearAllData() {
+        _isClearDataConfirmOpen.value = false
+    }
+
+    fun confirmClearAllDataToTrash() {
         viewModelScope.launch {
-            repository.deleteAll()
+            repository.moveAllToTrash()
+            _isClearDataConfirmOpen.value = false
+            syncManager.checkPendingCount()
+            syncManager.syncNow()
         }
     }
 
-    fun seedDemoExpenses() {
+    // Trash operations
+    fun restoreExpense(id: Long) {
         viewModelScope.launch {
-            val today = Formatters.todayDateString()
-            val sample = listOf(
-                Expense(
-                    amount = 50.0,
-                    category = "Tea/Coffee",
-                    note = "Chai",
-                    date = today,
-                    time = "10:15 AM",
-                    createdAt = System.currentTimeMillis() - 1000 * 60 * 180
-                ),
-                Expense(
-                    amount = 100.0,
-                    category = "Travel",
-                    note = "Rickshaw",
-                    date = today,
-                    time = "01:30 PM",
-                    createdAt = System.currentTimeMillis() - 1000 * 60 * 60
-                ),
-                Expense(
-                    amount = 80.0,
-                    category = "Food",
-                    note = "Snacks",
-                    date = today,
-                    time = "04:45 PM",
-                    createdAt = System.currentTimeMillis()
-                )
-            )
-            repository.insertAll(sample)
+            repository.restoreFromTrash(id)
+            syncManager.checkPendingCount()
+            syncManager.syncNow()
         }
+    }
+
+    fun deletePermanently(id: Long) {
+        viewModelScope.launch {
+            repository.deletePermanently(id)
+            syncManager.checkPendingCount()
+            syncManager.syncNow()
+        }
+    }
+
+    fun emptyTrash() {
+        viewModelScope.launch {
+            repository.emptyTrash()
+            syncManager.checkPendingCount()
+            syncManager.syncNow()
+        }
+    }
+
+    // CSV Export
+    fun exportCsv(context: Context): Boolean {
+        return CsvExporter.exportAndShare(context, allExpenses.value)
+    }
+
+    // Sync Actions
+    fun openSyncSettings() {
+        _isSyncSettingsOpen.value = true
+    }
+
+    fun closeSyncSettings() {
+        _isSyncSettingsOpen.value = false
+    }
+
+    fun syncNow() {
+        syncManager.syncNow()
     }
 }
 
-class ExpenseViewModelFactory(private val repository: ExpenseRepository) :
-    ViewModelProvider.Factory {
+class ExpenseViewModelFactory(
+    private val repository: ExpenseRepository,
+    private val syncManager: GoogleSheetsSyncManager
+) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(ExpenseViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return ExpenseViewModel(repository) as T
+            return ExpenseViewModel(repository, syncManager) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

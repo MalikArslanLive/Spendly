@@ -1,11 +1,8 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -13,7 +10,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -29,16 +25,16 @@ fun DeleteConfirmDialog(
 ) {
     val amountFormatted = Formatters.formatPkr(expense.amount)
     val titleText = if (expense.note.isNotBlank()) {
-        "Delete \"${expense.note}\"?"
+        "Move \"${expense.note}\" to Trash?"
     } else {
-        "Delete ${expense.category} Expense?"
+        "Move ${expense.category} to Trash?"
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
             Icon(
-                imageVector = Icons.Default.WarningAmber,
+                imageVector = Icons.Default.DeleteOutline,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.error,
                 modifier = Modifier.size(32.dp)
@@ -52,7 +48,7 @@ fun DeleteConfirmDialog(
         },
         text = {
             Text(
-                text = "Are you sure you want to delete this expense of $amountFormatted on ${expense.date}? This action cannot be undone.",
+                text = "Move this expense of $amountFormatted on ${expense.date} to Trash? You can restore it later from the Trash.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -65,7 +61,7 @@ fun DeleteConfirmDialog(
                 ),
                 modifier = Modifier.testTag("confirm_delete_button")
             ) {
-                Text("Delete", fontWeight = FontWeight.Bold)
+                Text("Move to Trash", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
