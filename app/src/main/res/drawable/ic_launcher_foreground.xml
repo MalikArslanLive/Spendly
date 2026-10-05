@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Banknote / Card peaking from wallet -->
+    <path
+        android:fillColor="#A7F3D0"
+        android:pathData="M34,34 h40 c2.2,0 4,1.8 4,4 v8 H30 v-8 c0,-2.2 1.8,-4 4,-4 z" />
+
+    <!-- Inner banknote line -->
+    <path
+        android:fillColor="#34D399"
+        android:pathData="M38,38 h32 v2 H38 z" />
+
+    <!-- Main Wallet Body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,42 h48 c3.3,0 6,2.7 6,6 v26 c0,3.3 -2.7,6 -6,6 H30 c-3.3,0 -6,-2.7 -6,-6 V48 c0,-3.3 2.7,-6 6,-6 z" />
+
+    <!-- Wallet Flap / Accent -->
+    <path
+        android:fillColor="#ECFDF5"
+        android:pathData="M60,51 h24 v18 H60 c-5,0 -9,-4 -9,-9 c0,-5 4,-9 9,-9 z" />
+
+    <!-- Gold coin clasp / button -->
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M65,60 m-4.5,0 a4.5,4.5 0 1,0 9,0 a4.5,4.5 0 1,0 -9,0" />
+
+    <path
+        android:fillColor="#FDE68A"
+        android:pathData="M65,60 m-2.2,0 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0" />
+
+    <!-- Decorative line on wallet front -->
+    <path
+        android:fillColor="#E2E8F0"
+        android:pathData="M32,56 h18 v2 H32 z" />
+
+    <path
+        android:fillColor="#E2E8F0"
+        android:pathData="M32,62 h12 v2 H32 z" />
+</vector>
