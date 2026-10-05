@@ -72,6 +72,16 @@ class GoogleSheetsSyncManager(
 
         const val SCOPE_DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
         const val SCOPE_SPREADSHEETS = "https://www.googleapis.com/auth/spreadsheets"
+
+        val STANDARD_HEADERS = listOf(
+            "Transaction ID",
+            "Date",
+            "Time",
+            "Type",
+            "Category",
+            "Amount",
+            "Note"
+        )
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -454,22 +464,11 @@ class GoogleSheetsSyncManager(
         syncJob = scope.launch {
             _syncStatus.value = _syncStatus.value.copy(state = SyncState.SYNCING)
 
-            val pendingExpenses = repository.getPendingSyncExpenses()
-            if (pendingExpenses.isEmpty()) {
-                val nowStr = Formatters.currentTimeString()
-                saveLastSyncTime(nowStr)
-                _syncStatus.value = _syncStatus.value.copy(
-                    state = SyncState.SYNCED,
-                    pendingCount = 0,
-                    lastSyncTime = nowStr
-                )
-                return@launch
-            }
-
             if (!isOnline()) {
+                val pending = repository.getPendingSyncExpenses()
                 _syncStatus.value = _syncStatus.value.copy(
                     state = SyncState.PENDING,
-                    pendingCount = pendingExpenses.size,
+                    pendingCount = pending.size,
                     errorMessage = "Offline. Changes saved locally. Will sync when online."
                 )
                 return@launch
@@ -477,9 +476,10 @@ class GoogleSheetsSyncManager(
 
             val token = getAccessToken()
             if (token.isNullOrBlank()) {
+                val pending = repository.getPendingSyncExpenses()
                 _syncStatus.value = _syncStatus.value.copy(
                     state = SyncState.FAILED,
-                    pendingCount = pendingExpenses.size,
+                    pendingCount = pending.size,
                     errorMessage = "Authentication expired. Tap to reconnect Google account."
                 )
                 return@launch
@@ -487,7 +487,7 @@ class GoogleSheetsSyncManager(
 
             val success = withContext(Dispatchers.IO) {
                 try {
-                    syncViaGoogleSheetsApi(sheetId, token, pendingExpenses)
+                    fullReconcileGoogleSheet(sheetId, token)
                 } catch (e: Exception) {
                     e.printStackTrace()
                     false
@@ -495,8 +495,6 @@ class GoogleSheetsSyncManager(
             }
 
             if (success) {
-                val ids = pendingExpenses.map { it.id }
-                repository.markExpensesSynced(ids)
                 val nowStr = Formatters.currentTimeString()
                 saveLastSyncTime(nowStr)
                 _syncStatus.value = _syncStatus.value.copy(
@@ -506,62 +504,391 @@ class GoogleSheetsSyncManager(
                     errorMessage = null
                 )
             } else {
+                val pending = repository.getPendingSyncExpenses()
                 _syncStatus.value = _syncStatus.value.copy(
                     state = SyncState.FAILED,
-                    pendingCount = pendingExpenses.size,
+                    pendingCount = pending.size,
                     errorMessage = "Sync failed. Will retry automatically."
                 )
             }
         }
     }
 
-    private fun syncViaGoogleSheetsApi(
+    /**
+     * Reorganizes and repairs a sheet tab's headers and column order so that the columns are:
+     * Transaction ID | Date | Time | Type | Category | Amount | Note
+     * "Note" is ALWAYS the last column. No existing data is lost.
+     */
+    fun checkAndReorganizeTabHeaders(
         spreadsheetId: String,
         accessToken: String,
-        expenses: List<Expense>
+        tabTitle: String
     ): Boolean {
         return try {
-            val monthlyGroups = expenses.groupBy { exp ->
-                val monthPrefix = if (exp.date.length >= 7) exp.date.substring(0, 7) else "2026-10"
-                Formatters.formatMonthYear(monthPrefix)
+            val encodedTitle = URLEncoder.encode(tabTitle, "UTF-8")
+            val getReq = Request.Builder()
+                .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values/$encodedTitle!A:Z")
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+
+            val getRes = client.newCall(getReq).execute()
+            if (!getRes.isSuccessful) return false
+
+            val json = JSONObject(getRes.body?.string() ?: "{}")
+            val valuesArr = json.optJSONArray("values")
+
+            if (valuesArr == null || valuesArr.length() == 0) {
+                // Empty sheet: write standard headers
+                val headerBody = JSONObject().apply {
+                    put("values", JSONArray().apply {
+                        val headerRow = JSONArray()
+                        STANDARD_HEADERS.forEach { headerRow.put(it) }
+                        put(headerRow)
+                    })
+                }.toString().toRequestBody("application/json".toMediaType())
+
+                val writeReq = Request.Builder()
+                    .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values/$encodedTitle!A1:G1?valueInputOption=USER_ENTERED")
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .put(headerBody)
+                    .build()
+
+                val res = client.newCall(writeReq).execute()
+                return res.isSuccessful
             }
 
-            for ((monthTab, items) in monthlyGroups) {
-                ensureMonthlyTabExists(spreadsheetId, accessToken, monthTab)
+            val firstRow = valuesArr.optJSONArray(0) ?: JSONArray()
+            val currentHeaders = (0 until firstRow.length()).map { firstRow.optString(it, "").trim() }
 
-                val encodedTab = URLEncoder.encode(monthTab, "UTF-8")
-                val rows = JSONArray()
-                for (item in items) {
-                    if (!item.isDeleted) {
-                        val txnId = if (item.transactionId.isNotBlank()) item.transactionId else "TXN-${item.id}"
+            val isExactStandard = currentHeaders.size == STANDARD_HEADERS.size &&
+                    currentHeaders.indices.all { currentHeaders[it].equals(STANDARD_HEADERS[it], ignoreCase = true) }
+
+            if (isExactStandard) {
+                return true
+            }
+
+            // Map each standard header to its column index in currentHeaders
+            fun findCol(vararg keywords: String): Int {
+                for (kw in keywords) {
+                    val idx = currentHeaders.indexOfFirst { it.contains(kw, ignoreCase = true) }
+                    if (idx >= 0) return idx
+                }
+                return -1
+            }
+
+            val idxTxnId = findCol("transaction", "txn", "id").takeIf { it >= 0 } ?: 0
+            val idxDate = findCol("date").takeIf { it >= 0 } ?: 1
+            val idxTime = findCol("time").takeIf { it >= 0 } ?: 2
+            val idxType = findCol("type").takeIf { it >= 0 } ?: 3
+            val idxCategory = findCol("cat").takeIf { it >= 0 } ?: 4
+            val idxAmount = findCol("amount").takeIf { it >= 0 } ?: 5
+            val idxNote = findCol("note", "desc").takeIf { it >= 0 } ?: 6
+
+            val reorganizedGrid = JSONArray()
+            val newHeaderRow = JSONArray()
+            STANDARD_HEADERS.forEach { newHeaderRow.put(it) }
+            reorganizedGrid.put(newHeaderRow)
+
+            for (r in 1 until valuesArr.length()) {
+                val oldRow = valuesArr.optJSONArray(r) ?: continue
+                val row = JSONArray().apply {
+                    put(oldRow.opt(idxTxnId) ?: "")
+                    put(oldRow.opt(idxDate) ?: "")
+                    put(oldRow.opt(idxTime) ?: "")
+                    put(oldRow.opt(idxType) ?: "")
+                    put(oldRow.opt(idxCategory) ?: "")
+                    put(oldRow.opt(idxAmount) ?: "")
+                    put(oldRow.opt(idxNote) ?: "")
+                }
+                reorganizedGrid.put(row)
+            }
+
+            val updateBody = JSONObject().apply {
+                put("values", reorganizedGrid)
+            }.toString().toRequestBody("application/json".toMediaType())
+
+            val updateReq = Request.Builder()
+                .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values/$encodedTitle!A1:G${valuesArr.length()}?valueInputOption=USER_ENTERED")
+                .addHeader("Authorization", "Bearer $accessToken")
+                .put(updateBody)
+                .build()
+
+            val updateRes = client.newCall(updateReq).execute()
+            updateRes.isSuccessful
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
+     * Performs full two-way reconciliation between local active app data and the Google Sheet.
+     * Ensures:
+     * - Every active transaction is present with its exact numeric Transaction ID.
+     * - Existing rows are updated if modified.
+     * - Obsolete or deleted rows in the sheet are removed.
+     * - Duplicate rows are eliminated.
+     * - Column order is strictly: Transaction ID | Date | Time | Type | Category | Amount | Note.
+     */
+    private suspend fun fullReconcileGoogleSheet(
+        spreadsheetId: String,
+        accessToken: String
+    ): Boolean {
+        return try {
+            val activeExpenses = repository.getAllActiveExpensesList()
+            val localTxnMap = activeExpenses.associateBy { it.transactionId }
+            val localByMonth = activeExpenses.groupBy {
+                val prefix = if (it.date.length >= 7) it.date.substring(0, 7) else "2026-10"
+                Formatters.formatMonthYear(prefix)
+            }
+
+            // Step 1: Fetch spreadsheet metadata (tabs)
+            val metaReq = Request.Builder()
+                .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId?fields=sheets.properties(sheetId,title)")
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+
+            val metaRes = client.newCall(metaReq).execute()
+            if (!metaRes.isSuccessful) return false
+            val metaJson = JSONObject(metaRes.body?.string() ?: "{}")
+            val sheetsArr = metaJson.optJSONArray("sheets") ?: JSONArray()
+
+            val existingTabTitles = mutableSetOf<String>()
+            for (i in 0 until sheetsArr.length()) {
+                val title = sheetsArr.getJSONObject(i).getJSONObject("properties").getString("title")
+                existingTabTitles.add(title.lowercase())
+            }
+
+            val requiredMonths = if (localByMonth.isEmpty()) {
+                listOf(Formatters.formatMonthYear(Formatters.currentMonthString()))
+            } else {
+                localByMonth.keys.toList()
+            }
+
+            // If spreadsheet only has "Sheet1" and it's empty, rename it to the first required month
+            if (sheetsArr.length() == 1) {
+                val onlySheet = sheetsArr.getJSONObject(0).getJSONObject("properties")
+                val onlyTitle = onlySheet.getString("title")
+                if (onlyTitle.equals("Sheet1", ignoreCase = true) && requiredMonths.isNotEmpty()) {
+                    val firstMonth = requiredMonths.first()
+                    val renameBody = JSONObject().apply {
+                        put("requests", JSONArray().apply {
+                            put(JSONObject().apply {
+                                put("updateSheetProperties", JSONObject().apply {
+                                    put("properties", JSONObject().apply {
+                                        put("sheetId", onlySheet.getInt("sheetId"))
+                                        put("title", firstMonth)
+                                    })
+                                    put("fields", "title")
+                                })
+                            })
+                        })
+                    }.toString().toRequestBody("application/json".toMediaType())
+
+                    val renameReq = Request.Builder()
+                        .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId:batchUpdate")
+                        .addHeader("Authorization", "Bearer $accessToken")
+                        .post(renameBody)
+                        .build()
+                    val renameRes = client.newCall(renameReq).execute()
+                    if (renameRes.isSuccessful) {
+                        existingTabTitles.remove("sheet1")
+                        existingTabTitles.add(firstMonth.lowercase())
+                    }
+                }
+            }
+
+            for (mTab in requiredMonths) {
+                if (!existingTabTitles.contains(mTab.lowercase())) {
+                    ensureMonthlyTabExists(spreadsheetId, accessToken, mTab)
+                    existingTabTitles.add(mTab.lowercase())
+                }
+            }
+
+            // Re-fetch sheet tabs to have up-to-date sheetIds and titles
+            val metaReq2 = Request.Builder()
+                .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId?fields=sheets.properties(sheetId,title)")
+                .addHeader("Authorization", "Bearer $accessToken")
+                .get()
+                .build()
+            val metaRes2 = client.newCall(metaReq2).execute()
+            val metaJson2 = JSONObject(metaRes2.body?.string() ?: "{}")
+            val currentSheetsArr = metaJson2.optJSONArray("sheets") ?: JSONArray()
+
+            val matchedLocalTxnIds = mutableSetOf<String>()
+            val rowsToDeleteBySheet = mutableMapOf<Int, MutableList<Int>>()
+            val valueUpdates = JSONArray()
+
+            // Step 2: Inspect and reconcile each tab in the spreadsheet
+            for (i in 0 until currentSheetsArr.length()) {
+                val sheetProp = currentSheetsArr.getJSONObject(i).getJSONObject("properties")
+                val sId = sheetProp.getInt("sheetId")
+                val sTitle = sheetProp.getString("title")
+
+                // Check and reorganize headers if column order is not standard
+                checkAndReorganizeTabHeaders(spreadsheetId, accessToken, sTitle)
+
+                val encodedTitle = URLEncoder.encode(sTitle, "UTF-8")
+                val valReq = Request.Builder()
+                    .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values/$encodedTitle!A:G")
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .get()
+                    .build()
+
+                val valRes = client.newCall(valReq).execute()
+                if (!valRes.isSuccessful) continue
+                val valJson = JSONObject(valRes.body?.string() ?: "{}")
+                val rows = valJson.optJSONArray("values") ?: JSONArray()
+
+                for (r in 1 until rows.length()) {
+                    val row = rows.optJSONArray(r) ?: continue
+                    val cellTxnId = row.optString(0, "").trim()
+
+                    if (cellTxnId.isBlank()) {
+                        rowsToDeleteBySheet.getOrPut(sId) { mutableListOf() }.add(r)
+                        continue
+                    }
+
+                    val exp = localTxnMap[cellTxnId]
+                    if (exp == null) {
+                        // Obsolete or deleted row: does not exist in local active transactions
+                        rowsToDeleteBySheet.getOrPut(sId) { mutableListOf() }.add(r)
+                    } else {
+                        if (matchedLocalTxnIds.contains(cellTxnId)) {
+                            // Duplicate row in spreadsheet -> delete duplicate
+                            rowsToDeleteBySheet.getOrPut(sId) { mutableListOf() }.add(r)
+                        } else {
+                            matchedLocalTxnIds.add(cellTxnId)
+                            // Compare row data with local active expense
+                            val sDate = row.optString(1, "").trim()
+                            val sTime = row.optString(2, "").trim()
+                            val sType = row.optString(3, "").trim()
+                            val sCat = row.optString(4, "").trim()
+                            val sAmtStr = row.optString(5, "").trim().replace("$", "").replace(",", "")
+                            val sAmt = sAmtStr.toDoubleOrNull()
+                            val sNote = row.optString(6, "").trim()
+
+                            val expType = if (exp.transactionType == "CREDIT") "Credit" else "Expense"
+                            val expAmt = exp.amount
+
+                            val isMatch = sDate == exp.date &&
+                                    sTime == exp.time &&
+                                    sType.equals(expType, ignoreCase = true) &&
+                                    sCat.equals(exp.category, ignoreCase = true) &&
+                                    sAmt != null && Math.abs(sAmt - expAmt) < 0.001 &&
+                                    sNote == exp.note
+
+                            if (!isMatch) {
+                                val updatedRow = JSONArray().apply {
+                                    put(exp.transactionId)
+                                    put(exp.date)
+                                    put(exp.time)
+                                    put(expType)
+                                    put(exp.category)
+                                    put(exp.amount)
+                                    put(exp.note)
+                                }
+                                val rowNum = r + 1
+                                valueUpdates.put(JSONObject().apply {
+                                    put("range", "$sTitle!A$rowNum:G$rowNum")
+                                    put("values", JSONArray().apply { put(updatedRow) })
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Step 3: Execute row deletions in descending index order per sheet
+            if (rowsToDeleteBySheet.isNotEmpty()) {
+                val deleteRequests = JSONArray()
+                for ((sId, indices) in rowsToDeleteBySheet) {
+                    val descIndices = indices.distinct().sortedDescending()
+                    for (rowIdx in descIndices) {
+                        deleteRequests.put(JSONObject().apply {
+                            put("deleteDimension", JSONObject().apply {
+                                put("range", JSONObject().apply {
+                                    put("sheetId", sId)
+                                    put("dimension", "ROWS")
+                                    put("startIndex", rowIdx)
+                                    put("endIndex", rowIdx + 1)
+                                })
+                            })
+                        })
+                    }
+                }
+                if (deleteRequests.length() > 0) {
+                    val batchDelBody = JSONObject().apply {
+                        put("requests", deleteRequests)
+                    }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+
+                    val delReq = Request.Builder()
+                        .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId:batchUpdate")
+                        .addHeader("Authorization", "Bearer $accessToken")
+                        .post(batchDelBody)
+                        .build()
+                    client.newCall(delReq).execute()
+                }
+            }
+
+            // Step 4: Execute row updates
+            if (valueUpdates.length() > 0) {
+                val batchUpdateBody = JSONObject().apply {
+                    put("valueInputOption", "USER_ENTERED")
+                    put("data", valueUpdates)
+                }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+
+                val updateReq = Request.Builder()
+                    .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values:batchUpdate")
+                    .addHeader("Authorization", "Bearer $accessToken")
+                    .post(batchUpdateBody)
+                    .build()
+                client.newCall(updateReq).execute()
+            }
+
+            // Step 5: Append missing active local transactions to their month tabs
+            val missingExpenses = activeExpenses.filter { it.transactionId !in matchedLocalTxnIds }
+            if (missingExpenses.isNotEmpty()) {
+                val missingByMonth = missingExpenses.groupBy {
+                    val prefix = if (it.date.length >= 7) it.date.substring(0, 7) else "2026-10"
+                    Formatters.formatMonthYear(prefix)
+                }
+                for ((mTab, items) in missingByMonth) {
+                    ensureMonthlyTabExists(spreadsheetId, accessToken, mTab)
+                    val encodedTab = URLEncoder.encode(mTab, "UTF-8")
+                    val rowsToAppend = JSONArray()
+                    for (item in items) {
                         val row = JSONArray().apply {
-                            put(txnId)
+                            put(item.transactionId)
                             put(item.date)
                             put(item.time)
                             put(if (item.transactionType == "CREDIT") "Credit" else "Expense")
                             put(item.category)
-                            put(item.note)
                             put(item.amount)
+                            put(item.note)
                         }
-                        rows.put(row)
+                        rowsToAppend.put(row)
                     }
-                }
-
-                if (rows.length() > 0) {
                     val appendBody = JSONObject().apply {
-                        put("values", rows)
-                    }.toString().toRequestBody("application/json".toMediaType())
+                        put("values", rowsToAppend)
+                    }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
 
                     val appendReq = Request.Builder()
                         .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId/values/$encodedTab!A:G:append?valueInputOption=USER_ENTERED")
                         .addHeader("Authorization", "Bearer $accessToken")
                         .post(appendBody)
                         .build()
-
-                    val appendRes = client.newCall(appendReq).execute()
-                    if (!appendRes.isSuccessful) return false
+                    client.newCall(appendReq).execute()
                 }
             }
+
+            // Step 6: Mark all active local expenses as SYNCED
+            if (activeExpenses.isNotEmpty()) {
+                repository.markExpensesSynced(activeExpenses.map { it.id })
+            }
+
             true
         } catch (e: Exception) {
             e.printStackTrace()
@@ -621,15 +948,9 @@ class GoogleSheetsSyncManager(
                     val encodedTab = URLEncoder.encode(monthTab, "UTF-8")
                     val headerBody = JSONObject().apply {
                         put("values", JSONArray().apply {
-                            put(JSONArray().apply {
-                                put("Transaction ID")
-                                put("Date")
-                                put("Time")
-                                put("Type")
-                                put("Category")
-                                put("Note")
-                                put("Amount")
-                            })
+                            val headerRow = JSONArray()
+                            STANDARD_HEADERS.forEach { headerRow.put(it) }
+                            put(headerRow)
                         })
                     }.toString().toRequestBody("application/json".toMediaType())
 
@@ -640,6 +961,9 @@ class GoogleSheetsSyncManager(
                         .build()
 
                     client.newCall(headerReq).execute()
+                } else {
+                    // Tab exists: verify and repair headers/column order
+                    checkAndReorganizeTabHeaders(spreadsheetId, accessToken, monthTab)
                 }
             }
         } catch (e: Exception) {
@@ -816,7 +1140,7 @@ class GoogleSheetsSyncManager(
             val encodedTab = URLEncoder.encode(foundRow.tabTitle, "UTF-8")
             val rowNumber = foundRow.rowIndex + 1 // 1-based row number for A1 notation
 
-            val txnId = if (expense.transactionId.isNotBlank()) expense.transactionId else "TXN-${expense.id}"
+            val txnId = if (expense.transactionId.isNotBlank()) expense.transactionId else expense.id.toString()
             val updateBody = JSONObject().apply {
                 put("values", JSONArray().apply {
                     put(JSONArray().apply {
@@ -825,8 +1149,8 @@ class GoogleSheetsSyncManager(
                         put(expense.time)
                         put(if (expense.transactionType == "CREDIT") "Credit" else "Expense")
                         put(expense.category)
-                        put(expense.note)
                         put(expense.amount)
+                        put(expense.note)
                     })
                 })
             }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())

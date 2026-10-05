@@ -2,7 +2,7 @@ package com.example.data
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicLong
 
 @Entity(tableName = "expenses")
 data class Expense(
@@ -19,16 +19,22 @@ data class Expense(
     val syncStatus: String = "PENDING", // PENDING, SYNCED, FAILED
     val lastSyncedAt: Long? = null,
     val transactionType: String = "EXPENSE", // "EXPENSE" or "CREDIT"
-    val transactionId: String = "" // Unique Transaction ID (e.g. "TXN-8F31A92C")
+    val transactionId: String = "" // Simple numeric Transaction ID (e.g. "1", "2", "3")
 )
 
+private val nextNumericId = AtomicLong(1L)
+
 /**
- * Generates a unique transaction ID in the format TXN-XXXXXXXX (8 hex chars, e.g. TXN-8F31A92C).
+ * Generates a simple sequential numeric transaction ID ("1", "2", "3", ...).
  */
 fun generateTransactionId(): String {
-    val randomBytes = ByteArray(4)
-    SecureRandom().nextBytes(randomBytes)
-    val hex = randomBytes.joinToString("") { "%02X".format(it) }
-    return "TXN-$hex"
+    return nextNumericId.getAndIncrement().toString()
+}
+
+/**
+ * Sets the counter to start after the given maximum ID.
+ */
+fun setStartingTransactionId(maxId: Long) {
+    nextNumericId.set(maxId + 1)
 }
 

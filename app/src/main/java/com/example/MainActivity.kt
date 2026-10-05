@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: ExpenseViewModel by viewModels {
         val database = AppDatabase.getDatabase(applicationContext)
-        val repository = ExpenseRepository(database.expenseDao())
+        val repository = ExpenseRepository(database.expenseDao(), applicationContext)
         val syncManager = GoogleSheetsSyncManager(applicationContext, repository, lifecycleScope)
         ExpenseViewModelFactory(repository, syncManager)
     }

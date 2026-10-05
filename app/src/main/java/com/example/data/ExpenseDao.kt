@@ -33,6 +33,12 @@ interface ExpenseDao {
     @Query("SELECT * FROM expenses WHERE transactionId = :txnId LIMIT 1")
     suspend fun getExpenseByTransactionId(txnId: String): Expense?
 
+    @Query("SELECT * FROM expenses ORDER BY createdAt ASC, id ASC")
+    suspend fun getAllExpensesRaw(): List<Expense>
+
+    @Query("SELECT MAX(CAST(transactionId AS INTEGER)) FROM expenses WHERE transactionId != ''")
+    suspend fun getMaxNumericTransactionId(): Long?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertExpense(expense: Expense): Long
 

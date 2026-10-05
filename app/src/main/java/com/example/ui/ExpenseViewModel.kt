@@ -48,6 +48,16 @@ class ExpenseViewModel(
     val syncManager: GoogleSheetsSyncManager
 ) : ViewModel() {
 
+    init {
+        viewModelScope.launch {
+            repository.migrateLegacyTransactionIds()
+            syncManager.checkPendingCount()
+            if (syncManager.isSpreadsheetConnected() && syncManager.isOnline()) {
+                syncManager.syncNow()
+            }
+        }
+    }
+
     // Active expenses (excludes trashed/deleted)
     val allExpenses: StateFlow<List<Expense>> = repository.allExpenses
         .stateIn(
@@ -380,10 +390,10 @@ class ExpenseViewModel(
     ) {
         viewModelScope.launch {
             val existingTxnId = _editingExpense.value?.transactionId
-            val txnId = if (id != 0L && !existingTxnId.isNullOrBlank()) {
+            val txnId = if (id != 0L && !existingTxnId.isNullOrBlank() && existingTxnId.toLongOrNull() != null) {
                 existingTxnId
             } else {
-                generateTransactionId()
+                repository.getNextTransactionId()
             }
 
             val expense = Expense(
@@ -460,6 +470,7 @@ class ExpenseViewModel(
                     closeAddEditDialog()
                 }
                 syncManager.checkPendingCount()
+                syncManager.syncNow()
             }
             return
         }
@@ -479,6 +490,7 @@ class ExpenseViewModel(
                     closeAddEditDialog()
                 }
                 syncManager.checkPendingCount()
+                syncManager.syncNow()
             } else {
                 // If Google Sheets deletion fails, keep local transaction intact
                 _expenseToDelete.value = null

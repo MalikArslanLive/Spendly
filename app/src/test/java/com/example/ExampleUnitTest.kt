@@ -121,20 +121,16 @@ class ExampleUnitTest {
 
     @Test
     fun testTransactionIdFormatAndUniqueness() {
+        com.example.data.setStartingTransactionId(0L)
         val id1 = generateTransactionId()
         val id2 = generateTransactionId()
 
-        // Must start with TXN-
-        assertTrue(id1.startsWith("TXN-"))
-        assertTrue(id2.startsWith("TXN-"))
+        // Must be simple positive numeric strings ("1", "2", ...)
+        assertTrue(id1.matches(Regex("^[1-9][0-9]*$")))
+        assertTrue(id2.matches(Regex("^[1-9][0-9]*$")))
 
-        // Format is TXN-XXXXXXXX (8 hex chars = 12 total chars)
-        assertEquals(12, id1.length)
-        assertEquals(12, id2.length)
-
-        // Must be uppercase hex after TXN-
-        val hexPart = id1.substring(4)
-        assertTrue(hexPart.matches(Regex("^[0-9A-F]{8}$")))
+        assertEquals("1", id1)
+        assertEquals("2", id2)
 
         // Must be unique
         assertTrue(id1 != id2)
@@ -151,7 +147,7 @@ class ExampleUnitTest {
             date = "2026-10-05",
             time = "10:30 AM",
             transactionType = "EXPENSE",
-            transactionId = generateTransactionId()
+            transactionId = "10"
         )
         val expense2 = Expense(
             id = 11,
@@ -161,7 +157,7 @@ class ExampleUnitTest {
             date = "2026-10-05",
             time = "10:30 AM",
             transactionType = "EXPENSE",
-            transactionId = generateTransactionId()
+            transactionId = "11"
         )
 
         // Amounts, categories, dates and notes are identical
@@ -170,7 +166,7 @@ class ExampleUnitTest {
         assertEquals(expense1.date, expense2.date)
         assertEquals(expense1.note, expense2.note)
 
-        // But transaction IDs are strictly unique
+        // But transaction IDs are strictly unique numeric values
         assertTrue(expense1.transactionId != expense2.transactionId)
 
         // Matching row by transaction ID targets ONLY the intended item
@@ -193,7 +189,7 @@ class ExampleUnitTest {
             date = "2026-10-05",
             time = "08:00 PM",
             transactionType = "EXPENSE",
-            transactionId = generateTransactionId()
+            transactionId = "1"
         )
         val creditTxn = Expense(
             id = 2,
@@ -203,32 +199,55 @@ class ExampleUnitTest {
             date = "2026-10-05",
             time = "02:00 PM",
             transactionType = "CREDIT",
-            transactionId = generateTransactionId()
+            transactionId = "2"
         )
 
-        assertTrue(expenseTxn.transactionId.startsWith("TXN-"))
-        assertTrue(creditTxn.transactionId.startsWith("TXN-"))
+        assertTrue(expenseTxn.transactionId.matches(Regex("^[0-9]+$")))
+        assertTrue(creditTxn.transactionId.matches(Regex("^[0-9]+$")))
         assertTrue(expenseTxn.transactionId != creditTxn.transactionId)
     }
 
     @Test
-    fun testLegacyTransactionsWithoutTransactionIdHandledSafely() {
-        // Legacy transaction created before Transaction ID feature
-        val legacyExpense = Expense(
-            id = 42,
-            amount = 350.0,
-            category = "Medical",
-            note = "Medicines",
-            date = "2026-10-05",
-            time = "11:00 AM",
-            transactionType = "EXPENSE"
-            // transactionId defaults to ""
+    fun testStandardGoogleSheetColumnOrderAndNoteIsLast() {
+        val expectedHeaders = listOf(
+            "Transaction ID",
+            "Date",
+            "Time",
+            "Type",
+            "Category",
+            "Amount",
+            "Note"
         )
-        assertEquals("", legacyExpense.transactionId)
 
-        // Fallback row matching safely resolves to numeric ID or TXN-id
-        val sheetColALegacy = listOf("ID", "42", "43")
-        val foundRow = sheetColALegacy.indexOf(legacyExpense.id.toString())
-        assertEquals(1, foundRow)
+        assertEquals(expectedHeaders, GoogleSheetsSyncManager.STANDARD_HEADERS)
+        assertEquals("Transaction ID", GoogleSheetsSyncManager.STANDARD_HEADERS[0])
+        assertEquals("Amount", GoogleSheetsSyncManager.STANDARD_HEADERS[5])
+        assertEquals("Note", GoogleSheetsSyncManager.STANDARD_HEADERS[6])
+        assertEquals("Note", GoogleSheetsSyncManager.STANDARD_HEADERS.last())
+    }
+
+    @Test
+    fun testTransactionIdPreservedOnEdit() {
+        val original = Expense(
+            id = 5,
+            amount = 100.0,
+            category = "Food",
+            note = "Lunch",
+            date = "2026-10-05",
+            time = "01:00 PM",
+            transactionType = "EXPENSE",
+            transactionId = "5"
+        )
+
+        // Editing amount, note, and category
+        val edited = original.copy(
+            amount = 150.0,
+            category = "Groceries",
+            note = "Lunch + Snacks"
+        )
+
+        // Transaction ID MUST remain identical after editing
+        assertEquals("5", edited.transactionId)
+        assertEquals(original.transactionId, edited.transactionId)
     }
 }
