@@ -1,20 +1,13 @@
 workflows:
-android-release:
-name: My Expenses Android APK
-max_build_duration: 120
-instance_type: mac_mini_m2
+android-build:
+name: Android APK Build
+instance_type: linux_x2
+max_build_duration: 30
 
-```
 scripts:
-  - name: Set Android SDK location
+  - name: Build APK
     script: |
-      echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/local.properties"
-
-  - name: Build Android Release APK
-    script: |
-      chmod +x ./gradlew
-      ./gradlew assembleRelease
+      ./gradlew assembleDebug
 
 artifacts:
-  - app/build/outputs/**/*.apk
-```
+  - app/build/outputs/apk/debug/*.apk
