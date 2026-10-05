@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
-import android.content.Context
+import android.app.Activity
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,11 +69,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.sync.GoogleSheetsSyncManager
 import com.example.sync.SyncState
 import com.example.ui.ExpenseViewModel
+import kotlinx.coroutines.launch
 
-/**
- * Extracts Google Spreadsheet ID from either a full URL or a raw ID.
- * Example URL: https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit
- */
 fun extractSpreadsheetIdFromUrl(input: String): String {
     val trimmed = input.trim()
     val regex = Regex("/spreadsheets/d/([a-zA-Z0-9-_]+)")
@@ -84,11 +84,43 @@ fun SyncSettingsDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val syncStatus by viewModel.syncStatus.collectAsStateWithLifecycle()
     val syncManager = viewModel.syncManager
 
     var showSheetsSetupDialog by remember { mutableStateOf(false) }
     var showDisconnectConfirmDialog by remember { mutableStateOf(false) }
+    var authErrorMessage by remember { mutableStateOf<String?>(null) }
+    var isSigningIn by remember { mutableStateOf(false) }
+
+    // Official Google Sign-In Activity Result Launcher
+    val googleSignInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        isSigningIn = false
+        if (result.resultCode == Activity.RESULT_OK) {
+            syncManager.handleGoogleSignInResult(
+                intent = result.data,
+                onSuccess = { account ->
+                    authErrorMessage = null
+                    Toast.makeText(context, "Authenticated as ${account.email}", Toast.LENGTH_SHORT).show()
+                    showSheetsSetupDialog = true
+                },
+                onError = { error ->
+                    authErrorMessage = error
+                }
+            )
+        } else {
+            // Cancelled or failed
+            syncManager.handleGoogleSignInResult(
+                intent = result.data,
+                onSuccess = {},
+                onError = { error ->
+                    authErrorMessage = error
+                }
+            )
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -173,7 +205,7 @@ fun SyncSettingsDialog(
                             .padding(16.dp)
                     ) {
                         Text(
-                            text = "Account Status",
+                            text = "Google Account Status",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -200,7 +232,7 @@ fun SyncSettingsDialog(
                             }
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
-                                text = "Sign into your personal Google account to synchronize your expenses with your own private Google Spreadsheet.",
+                                text = "Sign into your own Google Account to sync expenses to your private Google Spreadsheet.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -227,15 +259,46 @@ fun SyncSettingsDialog(
                     }
                 }
 
+                if (authErrorMessage != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFEE2E2))
+                    ) {
+                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Error,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = authErrorMessage ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF991B1B)
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // If NOT CONNECTED: show Connect Google Sheets button
                 if (syncStatus.state == SyncState.NOT_CONNECTED) {
                     Button(
                         onClick = {
-                            // Initiates the OAuth flow and transitions to Google Sheets Setup
-                            showSheetsSetupDialog = true
+                            isSigningIn = true
+                            authErrorMessage = null
+                            try {
+                                googleSignInLauncher.launch(syncManager.getGoogleSignInIntent())
+                            } catch (e: Exception) {
+                                isSigningIn = false
+                                authErrorMessage = "Unable to launch Google Sign-In: ${e.message}"
+                            }
                         },
+                        enabled = !isSigningIn,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp)
@@ -245,19 +308,29 @@ fun SyncSettingsDialog(
                             containerColor = MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.AccountCircle,
-                            contentDescription = null,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Connect Google Sheets",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                        )
+                        if (isSigningIn) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Connecting with Google...")
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.AccountCircle,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Connect Google Sheets",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
                     }
                 } else {
-                    // CONNECTED VIEW: Show spreadsheet details and actions
+                    // CONNECTED VIEW
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -269,13 +342,13 @@ fun SyncSettingsDialog(
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
                             Text(
-                                text = "Selected Spreadsheet",
+                                text = "Current Spreadsheet",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = syncStatus.spreadsheetTitle ?: GoogleSheetsSyncManager.DEFAULT_SPREADSHEET_TITLE,
+                                text = syncStatus.spreadsheetTitle ?: "No spreadsheet configured yet",
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.testTag("spreadsheet_name_text")
@@ -443,7 +516,7 @@ fun SyncSettingsDialog(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Information Card
+                // Privacy Note
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -459,10 +532,10 @@ fun SyncSettingsDialog(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "• Each user syncs only to their own Google Account & Spreadsheet.\n" +
-                                    "• Auto-creates separate monthly tabs (e.g. October 2026, November 2026).\n" +
-                                    "• Works 100% offline; queues changes and syncs when online.\n" +
-                                    "• Disconnecting removes account credentials and stops sync while preserving local records.",
+                            text = "• Each user authenticates their own Google Account.\n" +
+                                    "• Only your account's spreadsheet is ever modified.\n" +
+                                    "• Monthly tabs (e.g. October 2026) are managed automatically.\n" +
+                                    "• Disconnecting removes credentials and stops sync while preserving local records.",
                             style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -472,12 +545,13 @@ fun SyncSettingsDialog(
         }
     }
 
-    // Google Sheets Setup Dialog (Create New Spreadsheet OR Use Existing Spreadsheet)
+    // Google Sheets Setup Modal (Create New Spreadsheet OR Use Existing Spreadsheet)
     if (showSheetsSetupDialog) {
-        var selectedTab by remember { mutableIntStateOf(0) } // 0: Create New, 1: Use Existing
+        var selectedTab by remember { mutableIntStateOf(0) }
         var newSheetTitle by remember { mutableStateOf(GoogleSheetsSyncManager.DEFAULT_SPREADSHEET_TITLE) }
         var existingSheetUrl by remember { mutableStateOf("") }
         var isProcessing by remember { mutableStateOf(false) }
+        var setupErrorMessage by remember { mutableStateOf<String?>(null) }
 
         AlertDialog(
             onDismissRequest = {
@@ -491,14 +565,13 @@ fun SyncSettingsDialog(
             },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    // Tab selector: Create New vs Use Existing
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilterChip(
                             selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
+                            onClick = { selectedTab = 0; setupErrorMessage = null },
                             label = { Text("Create New") },
                             leadingIcon = {
                                 Icon(
@@ -512,7 +585,7 @@ fun SyncSettingsDialog(
 
                         FilterChip(
                             selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
+                            onClick = { selectedTab = 1; setupErrorMessage = null },
                             label = { Text("Use Existing") },
                             leadingIcon = {
                                 Icon(
@@ -528,9 +601,8 @@ fun SyncSettingsDialog(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     if (selectedTab == 0) {
-                        // Option 1: Create New Spreadsheet
                         Text(
-                            text = "A dedicated spreadsheet will be created in your Google Drive to store monthly expense tabs.",
+                            text = "A dedicated spreadsheet will be created in your Google Drive with monthly expense tabs.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -548,9 +620,8 @@ fun SyncSettingsDialog(
                                 .testTag("setup_new_sheet_title_input")
                         )
                     } else {
-                        // Option 2: Use Existing Spreadsheet (Paste Link)
                         Text(
-                            text = "Paste the complete Google Spreadsheet link. The app will extract the ID and connect.",
+                            text = "Paste the complete Google Spreadsheet link. The app will extract the ID and verify your account has access.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -570,6 +641,15 @@ fun SyncSettingsDialog(
                         )
                     }
 
+                    if (setupErrorMessage != null) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = setupErrorMessage ?: "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
                     if (isProcessing) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Row(
@@ -580,7 +660,7 @@ fun SyncSettingsDialog(
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "Connecting...",
+                                text = if (selectedTab == 0) "Creating spreadsheet in Google Drive..." else "Verifying access...",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                         }
@@ -590,30 +670,30 @@ fun SyncSettingsDialog(
             confirmButton = {
                 Button(
                     onClick = {
-                        val activeUser = syncStatus.accountEmail ?: "user@google.com"
                         isProcessing = true
-                        if (selectedTab == 0) {
-                            val title = newSheetTitle.ifBlank { GoogleSheetsSyncManager.DEFAULT_SPREADSHEET_TITLE }
-                            val generatedId = "sheet_${System.currentTimeMillis()}"
-                            syncManager.connectAccount(
-                                email = activeUser,
-                                spreadsheetId = generatedId,
-                                spreadsheetTitle = title
-                            )
-                            Toast.makeText(context, "Created spreadsheet \"$title\"", Toast.LENGTH_SHORT).show()
-                        } else {
-                            val extractedId = extractSpreadsheetIdFromUrl(existingSheetUrl)
-                            if (extractedId.isNotBlank()) {
-                                syncManager.connectAccount(
-                                    email = activeUser,
-                                    spreadsheetId = extractedId,
-                                    spreadsheetTitle = "Linked Spreadsheet"
-                                )
-                                Toast.makeText(context, "Connected to spreadsheet", Toast.LENGTH_SHORT).show()
+                        setupErrorMessage = null
+                        scope.launch {
+                            if (selectedTab == 0) {
+                                val result = syncManager.createSpreadsheetInUserDrive(newSheetTitle)
+                                isProcessing = false
+                                result.onSuccess {
+                                    Toast.makeText(context, "Spreadsheet created successfully!", Toast.LENGTH_SHORT).show()
+                                    showSheetsSetupDialog = false
+                                }.onFailure { error ->
+                                    setupErrorMessage = error.message ?: "Failed to create spreadsheet"
+                                }
+                            } else {
+                                val id = extractSpreadsheetIdFromUrl(existingSheetUrl)
+                                val result = syncManager.verifyAndConnectExistingSpreadsheet(id)
+                                isProcessing = false
+                                result.onSuccess { title ->
+                                    Toast.makeText(context, "Connected to \"$title\"", Toast.LENGTH_SHORT).show()
+                                    showSheetsSetupDialog = false
+                                }.onFailure { error ->
+                                    setupErrorMessage = error.message ?: "Failed to verify spreadsheet access"
+                                }
                             }
                         }
-                        isProcessing = false
-                        showSheetsSetupDialog = false
                     },
                     enabled = !isProcessing && (selectedTab == 0 || existingSheetUrl.isNotBlank()),
                     modifier = Modifier.testTag("confirm_sheets_setup_btn")

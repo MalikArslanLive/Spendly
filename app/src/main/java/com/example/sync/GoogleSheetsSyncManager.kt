@@ -1,6 +1,8 @@
 package com.example.sync
 
+import android.accounts.Account
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -8,6 +10,12 @@ import android.net.NetworkRequest
 import com.example.data.Expense
 import com.example.data.ExpenseRepository
 import com.example.util.Formatters
+import com.google.android.gms.auth.GoogleAuthUtil
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.Scope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,85 +60,10 @@ class GoogleSheetsSyncManager(
         private const val PREFS_NAME = "google_sheets_multiuser_prefs"
         private const val KEY_ACTIVE_USER = "active_user_email"
 
-        // Default title for auto-created user spreadsheet
         const val DEFAULT_SPREADSHEET_TITLE = "My Expenses"
 
-        // Google Apps Script template provided as an alternative lightweight deployment
-        fun getAppsScriptTemplate(spreadsheetId: String): String = """
-// Google Apps Script for user's spreadsheet ($spreadsheetId)
-function doPost(e) {
-  try {
-    var data = JSON.parse(e.postData.contents);
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var expenses = data.expenses || [];
-    
-    var monthlyGroups = {};
-    for (var i = 0; i < expenses.length; i++) {
-      var exp = expenses[i];
-      var tab = exp.monthTab || "Expenses";
-      if (!monthlyGroups[tab]) monthlyGroups[tab] = [];
-      monthlyGroups[tab].push(exp);
-    }
-    
-    for (var monthTab in monthlyGroups) {
-      var sheet = ss.getSheetByName(monthTab);
-      if (!sheet) {
-        sheet = ss.insertSheet(monthTab);
-        sheet.appendRow(["ID", "Date", "Time", "Amount", "Category", "Note"]);
-        sheet.getRange("A1:F1").setFontWeight("bold").setBackground("#D1FAE5");
-        sheet.setFrozenRows(1);
-      }
-      
-      var items = monthlyGroups[monthTab];
-      for (var j = 0; j < items.length; j++) {
-        var item = items[j];
-        var idStr = String(item.id);
-        var dataRange = sheet.getDataRange();
-        var values = dataRange.getValues();
-        var foundRow = -1;
-        for (var r = 1; r < values.length; r++) {
-          if (String(values[r][0]) === idStr) {
-            foundRow = r + 1;
-            break;
-          }
-        }
-        
-        if (item.isDeleted) {
-          if (foundRow > 1) {
-            sheet.deleteRow(foundRow);
-          }
-        } else {
-          var rowData = [item.id, item.date, item.time, item.amount, item.category, item.note];
-          if (foundRow > 1) {
-            sheet.getRange(foundRow, 1, 1, 6).setValues([rowData]);
-          } else {
-            sheet.appendRow(rowData);
-          }
-        }
-      }
-      updateMonthlyTotal(sheet);
-    }
-    return ContentService.createTextOutput(JSON.stringify({status: "success"})).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({status: "error", message: err.toString()})).setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function updateMonthlyTotal(sheet) {
-  var lastRow = sheet.getLastRow();
-  var sum = 0;
-  if (lastRow > 1) {
-    var amounts = sheet.getRange(2, 4, lastRow - 1, 1).getValues();
-    for (var i = 0; i < amounts.length; i++) {
-      var val = Number(amounts[i][0]);
-      if (!isNaN(val)) sum += val;
-    }
-  }
-  sheet.getRange("H1").setValue("Monthly Total");
-  sheet.getRange("H2").setValue("Rs. " + sum);
-  sheet.getRange("H1:H2").setFontWeight("bold").setBackground("#FEF3C7");
-}
-        """.trimIndent()
+        const val SCOPE_DRIVE_FILE = "https://www.googleapis.com/auth/drive.file"
+        const val SCOPE_SPREADSHEETS = "https://www.googleapis.com/auth/spreadsheets"
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -152,70 +85,198 @@ function updateMonthlyTotal(sheet) {
     }
 
     private fun loadInitialStatus(): SyncStatus {
+        val lastAccount = GoogleSignIn.getLastSignedInAccount(context)
         val activeEmail = prefs.getString(KEY_ACTIVE_USER, null)
-        return if (activeEmail.isNullOrBlank()) {
-            SyncStatus(state = SyncState.NOT_CONNECTED)
-        } else {
+
+        // Only restore connected state if a REAL Google Account is recognized
+        if (lastAccount != null && !activeEmail.isNullOrBlank() && lastAccount.email.equals(activeEmail, ignoreCase = true)) {
             val sheetId = prefs.getString("sheet_id_$activeEmail", null)
             val sheetTitle = prefs.getString("sheet_title_$activeEmail", DEFAULT_SPREADSHEET_TITLE)
             val lastSync = prefs.getString("last_sync_$activeEmail", null)
-            SyncStatus(
-                state = SyncState.SYNCED,
+            return SyncStatus(
+                state = if (!sheetId.isNullOrBlank()) SyncState.SYNCED else SyncState.PENDING,
                 accountEmail = activeEmail,
                 spreadsheetId = sheetId,
                 spreadsheetTitle = sheetTitle,
                 lastSyncTime = lastSync
             )
         }
+        return SyncStatus(state = SyncState.NOT_CONNECTED)
     }
 
-    // Connect user's own Google account
-    fun connectAccount(
-        email: String,
-        accessToken: String? = null,
-        spreadsheetId: String? = null,
-        spreadsheetTitle: String? = null
+    /**
+     * Builds the official Google Sign-In intent requesting Drive & Sheets scopes.
+     */
+    fun getGoogleSignInIntent(): Intent {
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestScopes(
+                Scope(SCOPE_DRIVE_FILE),
+                Scope(SCOPE_SPREADSHEETS)
+            )
+            .build()
+        return GoogleSignIn.getClient(context, gso).signInIntent
+    }
+
+    /**
+     * Handles the result returned by Google Sign-In activity result launcher.
+     */
+    fun handleGoogleSignInResult(
+        intent: Intent?,
+        onSuccess: (GoogleSignInAccount) -> Unit,
+        onError: (String) -> Unit
     ) {
-        val cleanEmail = email.trim().lowercase()
-        prefs.edit().putString(KEY_ACTIVE_USER, cleanEmail).apply()
+        try {
+            val task = GoogleSignIn.getSignedInAccountFromIntent(intent)
+            val account = task.getResult(ApiException::class.java)
+            val email = account.email
 
-        if (!accessToken.isNullOrBlank()) {
-            prefs.edit().putString("auth_token_$cleanEmail", accessToken.trim()).apply()
+            if (email.isNullOrBlank()) {
+                onError("Failed to obtain account email from Google account.")
+                return
+            }
+
+            val cleanEmail = email.trim().lowercase()
+            prefs.edit().putString(KEY_ACTIVE_USER, cleanEmail).apply()
+
+            val existingSheetId = prefs.getString("sheet_id_$cleanEmail", null)
+            val existingTitle = prefs.getString("sheet_title_$cleanEmail", null)
+
+            _syncStatus.value = SyncStatus(
+                state = if (existingSheetId != null) SyncState.SYNCED else SyncState.PENDING,
+                accountEmail = cleanEmail,
+                spreadsheetId = existingSheetId,
+                spreadsheetTitle = existingTitle,
+                errorMessage = null
+            )
+
+            checkPendingCount()
+            onSuccess(account)
+        } catch (e: ApiException) {
+            val detailedMsg = when (e.statusCode) {
+                10 -> "Developer error (Code 10): Ensure your Android OAuth Client ID in Google Cloud Console is configured with package name 'com.aistudio.myexpenses.kfqrz' and the correct SHA-1 fingerprint."
+                7 -> "Network error (Code 7): Please check your internet connection."
+                12501 -> "Google Sign-In was cancelled."
+                12500 -> "Google Sign-In failed (Code 12500): Check Google Play Services."
+                else -> "Google Sign-In failed (Code ${e.statusCode}): ${e.message}"
+            }
+            _syncStatus.value = SyncStatus(
+                state = SyncState.NOT_CONNECTED,
+                errorMessage = detailedMsg
+            )
+            onError(detailedMsg)
+        } catch (e: Exception) {
+            val msg = e.localizedMessage ?: "Unknown authentication error"
+            _syncStatus.value = SyncStatus(
+                state = SyncState.NOT_CONNECTED,
+                errorMessage = msg
+            )
+            onError(msg)
         }
-
-        val existingSheetId = spreadsheetId ?: prefs.getString("sheet_id_$cleanEmail", null)
-        val finalSheetId = if (!existingSheetId.isNullOrBlank()) {
-            existingSheetId
-        } else {
-            // Generate or default user's spreadsheet ID placeholder if not provided yet
-            "user_sheet_${cleanEmail.replace("@", "_").replace(".", "_")}"
-        }
-        val finalTitle = spreadsheetTitle ?: prefs.getString("sheet_title_$cleanEmail", DEFAULT_SPREADSHEET_TITLE) ?: DEFAULT_SPREADSHEET_TITLE
-
-        prefs.edit()
-            .putString("sheet_id_$cleanEmail", finalSheetId)
-            .putString("sheet_title_$cleanEmail", finalTitle)
-            .apply()
-
-        _syncStatus.value = _syncStatus.value.copy(
-            state = SyncState.PENDING,
-            accountEmail = cleanEmail,
-            spreadsheetId = finalSheetId,
-            spreadsheetTitle = finalTitle,
-            errorMessage = null
-        )
-
-        checkPendingCount()
-        syncNow()
     }
 
-    // Disconnect user's Google account
-    fun disconnectAccount() {
-        val activeEmail = prefs.getString(KEY_ACTIVE_USER, null)
-        if (!activeEmail.isNullOrBlank()) {
-            // Clear current active session user
-            prefs.edit().remove(KEY_ACTIVE_USER).apply()
+    /**
+     * Acquires an OAuth 2.0 access token for the authenticated user via GoogleAuthUtil.
+     */
+    suspend fun getAccessToken(): String? = withContext(Dispatchers.IO) {
+        val activeEmail = _syncStatus.value.accountEmail ?: return@withContext null
+        try {
+            val account = Account(activeEmail, "com.google")
+            val scopeString = "oauth2:$SCOPE_DRIVE_FILE $SCOPE_SPREADSHEETS"
+            GoogleAuthUtil.getToken(context, account, scopeString)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
         }
+    }
+
+    /**
+     * Creates a new dedicated spreadsheet in the authenticated user's Google Drive.
+     */
+    suspend fun createSpreadsheetInUserDrive(title: String): Result<String> = withContext(Dispatchers.IO) {
+        val activeEmail = _syncStatus.value.accountEmail
+            ?: return@withContext Result.failure(Exception("No Google account connected. Please authenticate first."))
+
+        val token = getAccessToken()
+            ?: return@withContext Result.failure(Exception("Unable to acquire Google OAuth token. Please ensure Google Cloud Console OAuth consent screen is configured."))
+
+        try {
+            val finalTitle = title.trim().ifBlank { DEFAULT_SPREADSHEET_TITLE }
+            val payload = JSONObject().apply {
+                put("properties", JSONObject().apply {
+                    put("title", finalTitle)
+                })
+            }
+            val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            val request = Request.Builder()
+                .url("https://sheets.googleapis.com/v4/spreadsheets")
+                .addHeader("Authorization", "Bearer $token")
+                .post(body)
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val resJson = JSONObject(response.body?.string() ?: "{}")
+                val newSheetId = resJson.getString("spreadsheetId")
+                setSpreadsheet(newSheetId, finalTitle)
+                Result.success(newSheetId)
+            } else {
+                val errBody = response.body?.string() ?: ""
+                Result.failure(Exception("Google Sheets API error (${response.code}): $errBody"))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Verifies that the authenticated user has access to an existing spreadsheet and connects it.
+     */
+    suspend fun verifyAndConnectExistingSpreadsheet(spreadsheetId: String): Result<String> = withContext(Dispatchers.IO) {
+        val activeEmail = _syncStatus.value.accountEmail
+            ?: return@withContext Result.failure(Exception("No Google account connected. Please authenticate first."))
+
+        val cleanId = spreadsheetId.trim()
+        if (cleanId.isBlank()) {
+            return@withContext Result.failure(Exception("Spreadsheet ID cannot be empty."))
+        }
+
+        val token = getAccessToken()
+            ?: return@withContext Result.failure(Exception("Unable to acquire Google OAuth token."))
+
+        try {
+            val request = Request.Builder()
+                .url("https://sheets.googleapis.com/v4/spreadsheets/$cleanId?fields=properties.title")
+                .addHeader("Authorization", "Bearer $token")
+                .get()
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val resJson = JSONObject(response.body?.string() ?: "{}")
+                val title = resJson.optJSONObject("properties")?.optString("title") ?: "Existing Spreadsheet"
+                setSpreadsheet(cleanId, title)
+                Result.success(title)
+            } else {
+                Result.failure(Exception("Cannot access spreadsheet (HTTP ${response.code}). Make sure $activeEmail has permission."))
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Disconnects the user's Google account and clears local session.
+     */
+    fun disconnectAccount() {
+        try {
+            val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN).build()
+            GoogleSignIn.getClient(context, gso).signOut()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        prefs.edit().remove(KEY_ACTIVE_USER).apply()
 
         _syncStatus.value = SyncStatus(
             state = SyncState.NOT_CONNECTED,
@@ -228,7 +289,9 @@ function updateMonthlyTotal(sheet) {
         )
     }
 
-    // Allow user to change or create their own spreadsheet
+    /**
+     * Stores the selected spreadsheet for the active user.
+     */
     fun setSpreadsheet(spreadsheetId: String, title: String = DEFAULT_SPREADSHEET_TITLE) {
         val activeEmail = _syncStatus.value.accountEmail ?: return
         val cleanId = spreadsheetId.trim()
@@ -242,26 +305,11 @@ function updateMonthlyTotal(sheet) {
         _syncStatus.value = _syncStatus.value.copy(
             spreadsheetId = cleanId,
             spreadsheetTitle = cleanTitle,
-            state = SyncState.PENDING
+            state = SyncState.PENDING,
+            errorMessage = null
         )
 
         syncNow()
-    }
-
-    fun getWebhookUrl(): String {
-        val activeEmail = _syncStatus.value.accountEmail ?: return ""
-        return prefs.getString("webhook_url_$activeEmail", "") ?: ""
-    }
-
-    fun setWebhookUrl(url: String) {
-        val activeEmail = _syncStatus.value.accountEmail ?: return
-        prefs.edit().putString("webhook_url_$activeEmail", url.trim()).apply()
-        checkPendingCount()
-    }
-
-    fun getAuthToken(): String? {
-        val activeEmail = _syncStatus.value.accountEmail ?: return null
-        return prefs.getString("auth_token_$activeEmail", null)
     }
 
     fun isOnline(): Boolean {
@@ -281,9 +329,8 @@ function updateMonthlyTotal(sheet) {
 
         cm.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                // When online, auto-sync pending changes if account is connected
                 scope.launch {
-                    if (_syncStatus.value.state != SyncState.NOT_CONNECTED) {
+                    if (_syncStatus.value.state != SyncState.NOT_CONNECTED && !_syncStatus.value.spreadsheetId.isNullOrBlank()) {
                         val pending = repository.getPendingSyncExpenses()
                         if (pending.isNotEmpty()) {
                             syncNow()
@@ -296,9 +343,7 @@ function updateMonthlyTotal(sheet) {
 
     fun checkPendingCount() {
         scope.launch {
-            if (_syncStatus.value.state == SyncState.NOT_CONNECTED) {
-                return@launch
-            }
+            if (_syncStatus.value.state == SyncState.NOT_CONNECTED) return@launch
             val pending = repository.getPendingSyncExpenses()
             val state = if (pending.isEmpty()) SyncState.SYNCED else SyncState.PENDING
             _syncStatus.value = _syncStatus.value.copy(
@@ -309,7 +354,13 @@ function updateMonthlyTotal(sheet) {
     }
 
     fun syncNow() {
-        if (_syncStatus.value.state == SyncState.NOT_CONNECTED) {
+        if (_syncStatus.value.state == SyncState.NOT_CONNECTED) return
+        val sheetId = _syncStatus.value.spreadsheetId
+        if (sheetId.isNullOrBlank()) {
+            _syncStatus.value = _syncStatus.value.copy(
+                state = SyncState.PENDING,
+                errorMessage = "No spreadsheet connected yet. Please select or create a spreadsheet."
+            )
             return
         }
 
@@ -319,9 +370,6 @@ function updateMonthlyTotal(sheet) {
             _syncStatus.value = _syncStatus.value.copy(state = SyncState.SYNCING)
 
             val pendingExpenses = repository.getPendingSyncExpenses()
-            val activeEmail = _syncStatus.value.accountEmail
-            val sheetId = _syncStatus.value.spreadsheetId
-
             if (pendingExpenses.isEmpty()) {
                 val nowStr = Formatters.currentTimeString()
                 saveLastSyncTime(nowStr)
@@ -342,22 +390,19 @@ function updateMonthlyTotal(sheet) {
                 return@launch
             }
 
-            val authToken = getAuthToken()
-            val webhookUrl = getWebhookUrl()
+            val token = getAccessToken()
+            if (token.isNullOrBlank()) {
+                _syncStatus.value = _syncStatus.value.copy(
+                    state = SyncState.FAILED,
+                    pendingCount = pendingExpenses.size,
+                    errorMessage = "Authentication expired. Tap to reconnect Google account."
+                )
+                return@launch
+            }
 
             val success = withContext(Dispatchers.IO) {
                 try {
-                    if (!authToken.isNullOrBlank() && !sheetId.isNullOrBlank()) {
-                        // Method 1: Direct Google Sheets API with user's OAuth access token
-                        syncViaGoogleSheetsApi(sheetId, authToken, pendingExpenses)
-                    } else if (webhookUrl.isNotBlank() && !sheetId.isNullOrBlank()) {
-                        // Method 2: Google Apps Script Web App endpoint deployed on user's own spreadsheet
-                        syncViaWebhookEndpoint(webhookUrl, sheetId, pendingExpenses)
-                    } else {
-                        // Neither Webhook nor OAuth Token is configured yet for network transmission
-                        // Mark as pending with clear user guidance
-                        false
-                    }
+                    syncViaGoogleSheetsApi(sheetId, token, pendingExpenses)
                 } catch (e: Exception) {
                     e.printStackTrace()
                     false
@@ -376,58 +421,12 @@ function updateMonthlyTotal(sheet) {
                     errorMessage = null
                 )
             } else {
-                val errorMsg = if (authToken.isNullOrBlank() && webhookUrl.isBlank()) {
-                    "Google Sheets API or Webhook URL not configured. Tap Settings to complete setup."
-                } else {
-                    "Sync failed. Will retry automatically."
-                }
                 _syncStatus.value = _syncStatus.value.copy(
                     state = SyncState.FAILED,
                     pendingCount = pendingExpenses.size,
-                    errorMessage = errorMsg
+                    errorMessage = "Sync failed. Will retry automatically."
                 )
             }
-        }
-    }
-
-    private fun syncViaWebhookEndpoint(
-        webhookUrl: String,
-        spreadsheetId: String,
-        expenses: List<Expense>
-    ): Boolean {
-        return try {
-            val payload = JSONObject()
-            payload.put("spreadsheetId", spreadsheetId)
-
-            val jsonArray = JSONArray()
-            for (exp in expenses) {
-                val item = JSONObject()
-                item.put("id", exp.id)
-                item.put("date", exp.date)
-                item.put("time", exp.time)
-                item.put("amount", exp.amount)
-                item.put("category", exp.category)
-                item.put("note", exp.note)
-                item.put("isDeleted", exp.isDeleted)
-
-                val monthPrefix = if (exp.date.length >= 7) exp.date.substring(0, 7) else "2026-10"
-                item.put("monthTab", Formatters.formatMonthYear(monthPrefix))
-
-                jsonArray.put(item)
-            }
-            payload.put("expenses", jsonArray)
-
-            val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-            val request = Request.Builder()
-                .url(webhookUrl)
-                .post(body)
-                .build()
-
-            val response = client.newCall(request).execute()
-            response.isSuccessful
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
         }
     }
 
@@ -437,7 +436,6 @@ function updateMonthlyTotal(sheet) {
         expenses: List<Expense>
     ): Boolean {
         return try {
-            // Group expenses by monthly tab
             val monthlyGroups = expenses.groupBy { exp ->
                 val monthPrefix = if (exp.date.length >= 7) exp.date.substring(0, 7) else "2026-10"
                 Formatters.formatMonthYear(monthPrefix)
@@ -446,7 +444,6 @@ function updateMonthlyTotal(sheet) {
             for ((monthTab, items) in monthlyGroups) {
                 ensureMonthlyTabExists(spreadsheetId, accessToken, monthTab)
 
-                // Append or update rows for this tab
                 val encodedTab = URLEncoder.encode(monthTab, "UTF-8")
                 val rows = JSONArray()
                 for (item in items) {
@@ -491,7 +488,6 @@ function updateMonthlyTotal(sheet) {
         monthTab: String
     ) {
         try {
-            // Check existing sheets
             val getReq = Request.Builder()
                 .url("https://sheets.googleapis.com/v4/spreadsheets/$spreadsheetId?fields=sheets.properties.title")
                 .addHeader("Authorization", "Bearer $accessToken")
@@ -514,7 +510,6 @@ function updateMonthlyTotal(sheet) {
                 }
 
                 if (!exists) {
-                    // Create monthly tab
                     val batchBody = JSONObject().apply {
                         val requests = JSONArray().apply {
                             put(JSONObject().apply {
@@ -536,7 +531,6 @@ function updateMonthlyTotal(sheet) {
 
                     client.newCall(addReq).execute()
 
-                    // Add Headers to new tab
                     val encodedTab = URLEncoder.encode(monthTab, "UTF-8")
                     val headerBody = JSONObject().apply {
                         put("values", JSONArray().apply {
