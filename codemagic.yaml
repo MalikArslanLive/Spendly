@@ -5,25 +5,10 @@ workflows:
     instance_type: mac_mini_m2
 
     scripts:
-      - name: Find and Build Android APK
+      - name: Build Android APK
         script: |
-          echo "Searching for Gradle wrapper..."
-          find . -name gradlew -type f
-
-          GRADLEW=$(find . -name gradlew -type f | head -1)
-
-          if [ -z "$GRADLEW" ]; then
-            echo "ERROR: gradlew was not found anywhere in the repository."
-            exit 1
-          fi
-
-          echo "Found Gradle wrapper at: $GRADLEW"
-
-          PROJECT_DIR=$(dirname "$GRADLEW")
-          cd "$PROJECT_DIR"
-
           chmod +x ./gradlew
           ./gradlew assembleDebug
 
     artifacts:
-      - "**/build/outputs/apk/**/*.apk"
+      - "**/build/outputs/apk/debug/*.apk"
