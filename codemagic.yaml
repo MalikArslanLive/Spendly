@@ -5,6 +5,11 @@ workflows:
     instance_type: mac_mini_m2
 
     scripts:
+      - name: Check Signing SHA
+        script: |
+          chmod +x ./gradlew
+          ./gradlew :app:signingReport
+
       - name: Build Android APK
         script: |
           chmod +x ./gradlew
