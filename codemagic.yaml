@@ -12,7 +12,11 @@ workflows:
 
       - name: Build Android APK
         script: |
+          if [ ! -f "debug.keystore" ] && [ -f "debug.keystore.base64" ]; then
+            python3 -c "import base64; open('debug.keystore','wb').write(base64.b64decode(open('debug.keystore.base64','rb').read()))"
+          fi
           chmod +x ./gradlew
+          ./gradlew :app:signingReport
           ./gradlew assembleDebug
 
     artifacts:
