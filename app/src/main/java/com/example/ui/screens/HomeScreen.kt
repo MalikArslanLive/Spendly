@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Error
-import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Sync
@@ -243,25 +242,6 @@ fun HomeScreen(
                                 showMenu = false
                             },
                             modifier = Modifier.testTag("menu_google_sheets_sync")
-                        )
-
-                        DropdownMenuItem(
-                            text = { Text("Export CSV") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.FileDownload,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            },
-                            onClick = {
-                                showMenu = false
-                                val success = viewModel.exportCsv(context)
-                                if (!success) {
-                                    Toast.makeText(context, "No active expenses to export", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.testTag("menu_export_csv")
                         )
 
                         DropdownMenuItem(

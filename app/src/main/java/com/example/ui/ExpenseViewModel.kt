@@ -9,7 +9,6 @@ import com.example.data.ExpenseRepository
 import com.example.data.generateTransactionId
 import com.example.sync.GoogleSheetsSyncManager
 import com.example.sync.SyncStatus
-import com.example.util.CsvExporter
 import com.example.util.Formatters
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -461,9 +460,9 @@ class ExpenseViewModel(
         val isSynced = isExpenseSyncedToGoogleSheets(expense)
 
         if (!isSynced) {
-            // Unsynced transaction: local deletion directly
+            // Unsynced transaction: move to trash directly
             viewModelScope.launch {
-                repository.deletePermanently(expense.id)
+                repository.moveToTrash(expense.id)
                 _expenseToDelete.value = null
                 _deleteErrorExpense.value = null
                 if (_editingExpense.value?.id == expense.id) {
@@ -475,15 +474,14 @@ class ExpenseViewModel(
             return
         }
 
-        // Synced transaction: delete exact row from Google Sheets first
+        // Synced transaction: delete exact row from Google Sheets first, then move to trash
         viewModelScope.launch {
             _isDeletingSyncedExpense.value = true
             val result = syncManager.deleteTransactionFromSheet(expense)
             _isDeletingSyncedExpense.value = false
 
             if (result.isSuccess) {
-                // Only consider local deletion successful after Google Sheets deletion succeeds
-                repository.deletePermanently(expense.id)
+                repository.moveToTrash(expense.id)
                 _expenseToDelete.value = null
                 _deleteErrorExpense.value = null
                 if (_editingExpense.value?.id == expense.id) {
@@ -492,7 +490,7 @@ class ExpenseViewModel(
                 syncManager.checkPendingCount()
                 syncManager.syncNow()
             } else {
-                // If Google Sheets deletion fails, keep local transaction intact
+                // If Google Sheets deletion fails, keep transaction intact and allow retry
                 _expenseToDelete.value = null
                 _deleteErrorExpense.value = expense
             }
@@ -538,10 +536,6 @@ class ExpenseViewModel(
             syncManager.checkPendingCount()
             syncManager.syncNow()
         }
-    }
-
-    fun exportCsv(context: Context): Boolean {
-        return CsvExporter.exportAndShare(context, allExpenses.value)
     }
 
     fun openSyncSettings() {

@@ -42,10 +42,10 @@ fun DeleteConfirmDialog(
     }
 
     val bodyText = if (isSynced) {
-        "This transaction has already been synced to Google Sheets.\nDeleting it will also remove it from the connected Google Sheet."
+        "This transaction has already been synced to Google Sheets.\nMoving it to Trash will remove its row from the connected Google Sheet. You can restore it anytime from Trash."
     } else {
         val typeLabel = if (expense.transactionType == "CREDIT") "credit" else "expense"
-        "Delete this $typeLabel of $amountFormatted on ${expense.date}? It will be removed from your records."
+        "Move this $typeLabel of $amountFormatted on ${expense.date} to Trash? You can restore it anytime from Trash."
     }
 
     AlertDialog(

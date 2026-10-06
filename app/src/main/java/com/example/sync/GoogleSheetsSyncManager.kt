@@ -217,7 +217,8 @@ class GoogleSheetsSyncManager(
     }
 
     /**
-     * Searches user's accessible Google Sheets in Google Drive.
+     * Searches user's accessible Google Sheets in Google Drive in real time.
+     * Supports multi-word queries (e.g. "My Expenses") and partial names (e.g. "My Exp").
      */
     suspend fun searchUserGoogleSheets(query: String = ""): Result<List<GoogleSheetItem>> = withContext(Dispatchers.IO) {
         val activeEmail = _syncStatus.value.accountEmail
@@ -227,15 +228,24 @@ class GoogleSheetsSyncManager(
             ?: return@withContext Result.failure(Exception("Unable to acquire Google OAuth token."))
 
         try {
-            val qParam = if (query.isNotBlank()) {
-                val escapedQuery = query.replace("'", "\\'")
-                "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and name contains '$escapedQuery'"
+            val trimmed = query.trim()
+            val tokens = if (trimmed.isNotBlank()) {
+                trimmed.split(Regex("\\s+")).filter { it.isNotBlank() }
             } else {
-                "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
+                emptyList()
+            }
+
+            // Build query for Google Drive v3 files API
+            val qParam = buildString {
+                append("mimeType='application/vnd.google-apps.spreadsheet' and trashed=false")
+                for (token in tokens) {
+                    val safeToken = token.replace("\\", "\\\\").replace("'", "\\'")
+                    append(" and name contains '$safeToken'")
+                }
             }
 
             val encodedQ = URLEncoder.encode(qParam, "UTF-8")
-            val url = "https://www.googleapis.com/drive/v3/files?q=$encodedQ&fields=files(id,name,webViewLink)&orderBy=modifiedTime%20desc&pageSize=30"
+            val url = "https://www.googleapis.com/drive/v3/files?q=$encodedQ&fields=files(id,name,webViewLink)&orderBy=modifiedTime%20desc&pageSize=50"
 
             val req = Request.Builder()
                 .url(url)
@@ -255,9 +265,43 @@ class GoogleSheetsSyncManager(
                     val link = fileObj.optString("webViewLink", "https://docs.google.com/spreadsheets/d/$id/edit")
                     items.add(GoogleSheetItem(id = id, name = name, webViewLink = link))
                 }
-                Result.success(items)
+                // Filter client-side to guarantee all partial tokens match case-insensitively
+                val filtered = if (tokens.isNotEmpty()) {
+                    items.filter { item ->
+                        tokens.all { t -> item.name.contains(t, ignoreCase = true) }
+                    }
+                } else {
+                    items
+                }
+                Result.success(filtered)
             } else {
-                Result.failure(Exception("Drive search failed (HTTP ${res.code})"))
+                // If token query fails (e.g. HTTP 400 due to special symbols), fallback to querying spreadsheets and filtering locally
+                val fallbackQ = URLEncoder.encode("mimeType='application/vnd.google-apps.spreadsheet' and trashed=false", "UTF-8")
+                val fallbackUrl = "https://www.googleapis.com/drive/v3/files?q=$fallbackQ&fields=files(id,name,webViewLink)&orderBy=modifiedTime%20desc&pageSize=50"
+                val fallbackReq = Request.Builder()
+                    .url(fallbackUrl)
+                    .addHeader("Authorization", "Bearer $token")
+                    .get()
+                    .build()
+
+                val fallbackRes = client.newCall(fallbackReq).execute()
+                if (fallbackRes.isSuccessful) {
+                    val resJson = JSONObject(fallbackRes.body?.string() ?: "{}")
+                    val filesArr = resJson.optJSONArray("files") ?: JSONArray()
+                    val items = mutableListOf<GoogleSheetItem>()
+                    for (i in 0 until filesArr.length()) {
+                        val fileObj = filesArr.getJSONObject(i)
+                        val id = fileObj.getString("id")
+                        val name = fileObj.optString("name", "Untitled Spreadsheet")
+                        val link = fileObj.optString("webViewLink", "https://docs.google.com/spreadsheets/d/$id/edit")
+                        if (tokens.isEmpty() || tokens.all { t -> name.contains(t, ignoreCase = true) }) {
+                            items.add(GoogleSheetItem(id = id, name = name, webViewLink = link))
+                        }
+                    }
+                    Result.success(items)
+                } else {
+                    Result.failure(Exception("Drive search failed (HTTP ${res.code})"))
+                }
             }
         } catch (e: Exception) {
             Result.failure(e)

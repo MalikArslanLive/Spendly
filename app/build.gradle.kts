@@ -20,6 +20,12 @@ android {
   }
 
   signingConfigs {
+    create("debugConfig") {
+      storeFile = file("${rootDir}/debug.keystore")
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+    }
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       storeFile = file(keystorePath)
@@ -37,7 +43,7 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      signingConfig = signingConfigs.getByName("debug")
+      signingConfig = signingConfigs.getByName("debugConfig")
     }
   }
   compileOptions {
@@ -61,6 +67,7 @@ secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+  ignoreList.add("GOOGLE_OAUTH_CLIENT_ID")
 }
 
 // Some unused dependencies are commented out below instead of being removed.

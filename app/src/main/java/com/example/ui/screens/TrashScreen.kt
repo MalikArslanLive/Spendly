@@ -31,6 +31,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -206,18 +208,39 @@ fun TrashScreen(
                                 Spacer(modifier = Modifier.width(12.dp))
 
                                 Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = if (expense.note.isNotBlank()) expense.note else expense.category,
+                                            style = MaterialTheme.typography.titleMedium.copy(
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 16.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = if (expense.transactionType == "CREDIT") Color(0xFFD1FAE5) else MaterialTheme.colorScheme.surfaceVariant
+                                        ) {
+                                            Text(
+                                                text = if (expense.transactionType == "CREDIT") "Credit" else "Expense",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                                color = if (expense.transactionType == "CREDIT") Color(0xFF065F46) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(2.dp))
+
                                     Text(
-                                        text = if (expense.note.isNotBlank()) expense.note else expense.category,
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            fontWeight = FontWeight.SemiBold,
-                                            fontSize = 16.sp
-                                        ),
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${expense.date} • ${expense.time}",
+                                        text = "${if (expense.note.isNotBlank()) "${expense.category} • " else ""}${expense.date} • ${expense.time} • ID: #${expense.transactionId}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -227,7 +250,7 @@ fun TrashScreen(
                                     text = Formatters.formatPkr(expense.amount),
                                     style = MaterialTheme.typography.titleMedium.copy(
                                         fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.error
+                                        color = if (expense.transactionType == "CREDIT") Color(0xFF059669) else MaterialTheme.colorScheme.error
                                     )
                                 )
                             }

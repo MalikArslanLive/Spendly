@@ -58,6 +58,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -80,6 +81,7 @@ import com.example.sync.GoogleSheetItem
 import com.example.sync.GoogleSheetsSyncManager
 import com.example.sync.SyncState
 import com.example.ui.ExpenseViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 fun extractSpreadsheetIdFromUrl(input: String): String {
@@ -644,6 +646,24 @@ fun SyncSettingsDialog(
         var isProcessing by remember { mutableStateOf(false) }
         var setupErrorMessage by remember { mutableStateOf<String?>(null) }
 
+        // Real-time Drive spreadsheet search as user types with debouncing
+        LaunchedEffect(searchQuery, selectedTopTab, existingSubTab) {
+            if (selectedTopTab == 1 && existingSubTab == 1) {
+                if (searchQuery.isNotBlank()) {
+                    delay(300)
+                }
+                isSearching = true
+                val res = syncManager.searchUserGoogleSheets(searchQuery)
+                isSearching = false
+                res.onSuccess {
+                    searchResults = it
+                    setupErrorMessage = null
+                }.onFailure {
+                    setupErrorMessage = it.message
+                }
+            }
+        }
+
         AlertDialog(
             onDismissRequest = {
                 if (!isProcessing) showSheetsSetupDialog = false
@@ -729,18 +749,9 @@ fun SyncSettingsDialog(
                                 onClick = {
                                     existingSubTab = 1
                                     setupErrorMessage = null
-                                    if (searchResults.isEmpty()) {
-                                        isSearching = true
-                                        scope.launch {
-                                            val res = syncManager.searchUserGoogleSheets("")
-                                            isSearching = false
-                                            res.onSuccess { searchResults = it }
-                                                .onFailure { setupErrorMessage = it.message }
-                                        }
-                                    }
                                 },
                                 label = { Text("Option B: Search Sheets", fontSize = 12.sp) },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f).testTag("chip_search_sheets")
                             )
                         }
 
@@ -785,9 +796,23 @@ fun SyncSettingsDialog(
                                     value = searchQuery,
                                     onValueChange = { searchQuery = it },
                                     label = { Text("Search by name") },
+                                    placeholder = { Text("e.g. My Expenses") },
                                     singleLine = true,
+                                    trailingIcon = {
+                                        if (searchQuery.isNotEmpty()) {
+                                            IconButton(onClick = { searchQuery = "" }) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Clear search",
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    },
                                     shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.weight(1f)
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("search_spreadsheet_input")
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 IconButton(
@@ -804,6 +829,7 @@ fun SyncSettingsDialog(
                                         .size(48.dp)
                                         .clip(RoundedCornerShape(10.dp))
                                         .background(MaterialTheme.colorScheme.primaryContainer)
+                                        .testTag("search_spreadsheet_btn")
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Search,

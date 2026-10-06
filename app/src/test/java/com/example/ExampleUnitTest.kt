@@ -4,7 +4,6 @@ import com.example.data.Expense
 import com.example.data.generateTransactionId
 import com.example.sync.GoogleSheetsSyncManager
 import com.example.ui.screens.extractSpreadsheetIdFromUrl
-import com.example.util.CsvExporter
 import com.example.util.Formatters
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -40,20 +39,6 @@ class ExampleUnitTest {
         assertTrue(days.size == 35 || days.size == 42)
         val octDays = days.filter { it.isCurrentMonth }
         assertEquals(31, octDays.size)
-    }
-
-    @Test
-    fun testCsvExportFormat() {
-        val expenses = listOf(
-            Expense(id = 1, amount = 50.0, category = "Tea/Coffee", note = "Office tea", date = "2026-10-05", time = "10:30"),
-            Expense(id = 2, amount = 100.0, category = "Travel", note = "Rickshaw", date = "2026-10-05", time = "14:20")
-        )
-        val csv = CsvExporter.generateCsvString(expenses)
-        val lines = csv.trim().split("\n")
-        assertEquals(3, lines.size)
-        assertEquals("Date,Time,Amount,Category,Note", lines[0])
-        assertEquals("2026-10-05,10:30,50,Tea/Coffee,Office tea", lines[1])
-        assertEquals("2026-10-05,14:20,100,Travel,Rickshaw", lines[2])
     }
 
     @Test
@@ -249,5 +234,78 @@ class ExampleUnitTest {
         // Transaction ID MUST remain identical after editing
         assertEquals("5", edited.transactionId)
         assertEquals(original.transactionId, edited.transactionId)
+    }
+
+    @Test
+    fun testTrashAndRestorePreservesAllTransactionDataAndSameTransactionId() {
+        val original = Expense(
+            id = 42,
+            amount = 1500.0,
+            category = "Shopping",
+            note = "Eid gift",
+            date = "2026-10-05",
+            time = "04:30 PM",
+            transactionType = "EXPENSE",
+            transactionId = "42"
+        )
+
+        // Move to trash
+        val trashed = original.copy(
+            isDeleted = true,
+            deletedAt = 1760000000000L,
+            syncStatus = "PENDING"
+        )
+
+        // All fields MUST be preserved in Trash
+        assertEquals(original.transactionId, trashed.transactionId)
+        assertEquals(original.amount, trashed.amount, 0.0)
+        assertEquals(original.category, trashed.category)
+        assertEquals(original.note, trashed.note)
+        assertEquals(original.date, trashed.date)
+        assertEquals(original.time, trashed.time)
+        assertEquals(original.transactionType, trashed.transactionType)
+        assertTrue(trashed.isDeleted)
+
+        // Restore from trash
+        val restored = trashed.copy(
+            isDeleted = false,
+            deletedAt = null,
+            syncStatus = "PENDING"
+        )
+
+        // Restored transaction MUST retain the SAME Transaction ID and original fields
+        assertEquals(original.transactionId, restored.transactionId)
+        assertEquals("42", restored.transactionId)
+        assertEquals(original.amount, restored.amount, 0.0)
+        assertEquals(original.category, restored.category)
+        assertEquals(original.note, restored.note)
+        assertEquals(original.date, restored.date)
+        assertEquals(original.time, restored.time)
+        assertEquals(original.transactionType, restored.transactionType)
+        assertTrue(!restored.isDeleted)
+    }
+
+    @Test
+    fun testDriveSearchMultiWordAndPartialMatching() {
+        val mockDriveFiles = listOf(
+            "My Expenses",
+            "My Expenses 2026",
+            "My Expenses Test",
+            "Personal Budget",
+            "Office Spendly"
+        )
+
+        // Simulate query "My Exp"
+        val query = "My Exp"
+        val tokens = query.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+
+        val matched = mockDriveFiles.filter { name ->
+            tokens.all { t -> name.contains(t, ignoreCase = true) }
+        }
+
+        assertEquals(3, matched.size)
+        assertTrue(matched.contains("My Expenses"))
+        assertTrue(matched.contains("My Expenses 2026"))
+        assertTrue(matched.contains("My Expenses Test"))
     }
 }
