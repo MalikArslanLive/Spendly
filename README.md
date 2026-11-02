@@ -4,7 +4,7 @@
 
 Spendly is a native Android personal finance app for recording money coming in and going out, reviewing daily and monthly activity, and synchronizing transactions to a connected Google Spreadsheet.
 
-Developed by [Malik Arslan](https://github.com/MalikArslanLive) with assistance from [Google AI Studio](https://aistudio.google.com/). Android APK builds are configured through [Codemagic](https://codemagic.io/start/).
+Developed by [Malik Arslan](https://malikarslan.com/) with assistance from [Google AI Studio](https://aistudio.google.com/). Android APK builds are configured through [Codemagic](https://codemagic.io/start/).
 
 [Features](#features) · [Design](#design-and-navigation) · [Google Sheets](#google-sheets-sync) · [Build](#build-and-run) · [Architecture](#project-structure)
 
@@ -247,7 +247,9 @@ Discuss substantial changes before submitting a pull request, and include releva
 
 ## Author and development workflow
 
-Created by **Malik Arslan**.
+Developed by [Malik Arslan](https://malikarslan.com/).
+
+Website: [malikarslan.com](https://malikarslan.com/) · GitHub: [MalikArslanLive](https://github.com/MalikArslanLive)
 
 - **Google AI Studio:** assisted code creation and iteration, as described by the author.
 - **GitHub:** source code and version history.
